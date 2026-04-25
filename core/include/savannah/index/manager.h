@@ -66,6 +66,12 @@ class IndexManager {
 
   std::vector<IndexInfo> list() const;
 
+  // Planner-facing helpers (F5): indexes are named for DDL, but query
+  // planning happens by field path.
+  bool has_path(std::string_view field_path) const;
+  const std::vector<std::size_t>* lookup_exact(
+      std::string_view field_path, const IndexedValue& key) const;
+
   // Walk every index and add the doc's value(s). Caller passes the slot
   // index so the index can record where the doc lives. Array-valued paths
   // are skipped (multikey deferred).
@@ -85,6 +91,9 @@ class IndexManager {
     std::string field_path;
     std::map<IndexedValue, std::vector<std::size_t>, IndexedValueLess> by_value;
   };
+
+  Entry* find_by_path(std::string_view field_path);
+  const Entry* find_by_path(std::string_view field_path) const;
 
   // Indexes by name. Pointer stability matters because we sometimes pass
   // Entry references around; `unique_ptr` keeps addresses stable across

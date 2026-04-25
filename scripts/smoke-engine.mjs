@@ -27,6 +27,17 @@ function findAll(db, coll, filter) {
 function getIndexInfo(db, coll, name) {
   return engine.listIndexes(db, coll).find((index) => index.name === name);
 }
+
+function assertByteIdentical(actual, expected, label) {
+  assert.equal(actual.length, expected.length, `${label}: length mismatch`);
+  for (let i = 0; i < actual.length; ++i) {
+    assert.equal(
+      Buffer.compare(Buffer.from(actual[i]), Buffer.from(expected[i])),
+      0,
+      `${label}: doc ${i} differs`,
+    );
+  }
+}
 const ser = (o) => Buffer.from(BSON.serialize(o));
 
 const docs = [
@@ -745,4 +756,43 @@ assert.throws(
   assert.equal(engine.listIndexes('zoo', 'idx_drop').length, 0);
 }
 
-console.log('OK — native engine: CRUD + cursors + filters + nested + sort + projection + index metadata');
+// ---- Slice F5: planner equality lookup -------------------------------
+{
+  const plannerDocs = [
+    { _id: 1, kind: 'cat', age: 2, habitat: 'house' },
+    { _id: 2, kind: 'dog', age: 5, habitat: 'yard' },
+    { _id: 3, kind: 'cat', age: 4, habitat: 'yard' },
+    { _id: 4, kind: 'cat', age: 2, habitat: 'barn' },
+  ];
+  for (const doc of plannerDocs) {
+    const bytes = ser(doc);
+    engine.insert('zoo', 'f5_scan', [bytes]);
+    engine.insert('zoo', 'f5_idx', [bytes]);
+  }
+  let r = engine.createIndex('zoo', 'f5_idx', 'kind_1', 'kind');
+  assert.equal(r.created, true);
+
+  // Single indexed equality clause should return byte-identical results.
+  const catsScan = findAll('zoo', 'f5_scan', ser({ kind: 'cat' }));
+  const catsIdx = findAll('zoo', 'f5_idx', ser({ kind: 'cat' }));
+  assertByteIdentical(catsIdx, catsScan, 'single-clause indexed equality');
+
+  // The indexed path must still apply the full filter to non-indexed clauses.
+  const catAgeScan = findAll('zoo', 'f5_scan', ser({ kind: 'cat', age: 2 }));
+  const catAgeIdx = findAll('zoo', 'f5_idx', ser({ kind: 'cat', age: 2 }));
+  assertByteIdentical(catAgeIdx, catAgeScan, 'indexed clause plus residual filter');
+
+  // Two indexable clauses should fall back to scan and still match byte-for-byte.
+  r = engine.createIndex('zoo', 'f5_idx', 'age_1', 'age');
+  assert.equal(r.created, true);
+  const twoClauseScan = findAll('zoo', 'f5_scan', ser({ kind: 'cat', age: 2 }));
+  const twoClauseIdx = findAll('zoo', 'f5_idx', ser({ kind: 'cat', age: 2 }));
+  assertByteIdentical(twoClauseIdx, twoClauseScan, 'two indexable clauses fallback');
+
+  // Operator subdocs are not indexable in F5 and must preserve scan parity.
+  const opScan = findAll('zoo', 'f5_scan', ser({ kind: { $eq: 'cat' } }));
+  const opIdx = findAll('zoo', 'f5_idx', ser({ kind: { $eq: 'cat' } }));
+  assertByteIdentical(opIdx, opScan, 'operator subdoc fallback');
+}
+
+console.log('OK — native engine: CRUD + cursors + filters + nested + sort + projection + index metadata + equality planner');

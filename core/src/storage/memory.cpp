@@ -1,12 +1,15 @@
 #include "savannah/storage/memory.h"
 
 #include "savannah/query/filter.h"
+#include "savannah/query/value.h"
 #include "savannah/query/update.h"
 
 #include <bson/bson.h>
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
+#include <string>
 #include <utility>
 
 namespace savannah::storage {
@@ -81,10 +84,105 @@ class MemoryIterator final : public jungle::storage::v1::Iterator {
   std::size_t end_{0};
 };
 
+// Snapshot the candidate slot ids at iterator creation so getMore keeps the
+// same view even if later inserts/updates mutate the underlying index vector.
+class IndexLookupIterator final : public jungle::storage::v1::Iterator {
+ public:
+  IndexLookupIterator(const std::vector<DocSlot>& slots,
+                      std::vector<std::size_t> slot_ids,
+                      std::span<const std::uint8_t> filter_bytes)
+      : slots_(slots),
+        slot_ids_(std::move(slot_ids)),
+        filter_(filter_bytes.begin(), filter_bytes.end()) {}
+
+  bool has_next() override {
+    while (index_ < slot_ids_.size()) {
+      const std::size_t slot_idx = slot_ids_[index_];
+      if (slot_idx >= slots_.size()) {
+        ++index_;
+        continue;
+      }
+      const auto& slot = slots_[slot_idx];
+      // Full filter re-check preserves exact scan parity even when the
+      // index only satisfies one clause or the slot has since tombstoned.
+      if (!slot.deleted &&
+          jungle::query::v1::matches(slot.view, filter_)) {
+        return true;
+      }
+      ++index_;
+    }
+    return false;
+  }
+
+  bson::BsonView next() override { return slots_[slot_ids_[index_++]].view; }
+
+ private:
+  const std::vector<DocSlot>& slots_;
+  std::vector<std::size_t> slot_ids_;
+  std::vector<std::uint8_t> filter_;
+  std::size_t index_{0};
+};
+
+bool is_operator_subdoc(bson_iter_t value) {
+  if (bson_iter_type(&value) != BSON_TYPE_DOCUMENT) return false;
+  std::uint32_t len = 0;
+  const std::uint8_t* data = nullptr;
+  bson_iter_document(&value, &len, &data);
+  bson_t sub;
+  if (!bson_init_static(&sub, data, len)) return false;
+  bson_iter_t it;
+  if (!bson_iter_init(&it, &sub)) return false;
+  if (!bson_iter_next(&it)) return false;
+  const char* key = bson_iter_key(&it);
+  return key && key[0] == '$';
+}
+
+struct ExactLookupPlan {
+  std::string field_path;
+  index::IndexedValue key;
+};
+
+std::optional<ExactLookupPlan> plan_exact_lookup(
+    const index::IndexManager& indexes,
+    std::span<const std::uint8_t> filter_bytes) {
+  bson_t filter;
+  if (filter_bytes.size() < 5 ||
+      !bson_init_static(&filter, filter_bytes.data(), filter_bytes.size())) {
+    return std::nullopt;
+  }
+
+  bson_iter_t it;
+  if (!bson_iter_init(&it, &filter)) return std::nullopt;
+
+  std::optional<ExactLookupPlan> plan;
+  std::size_t indexable_count = 0;
+  while (bson_iter_next(&it)) {
+    const char* key = bson_iter_key(&it);
+    if (!key || key[0] == '$') continue;
+    if (!indexes.has_path(key)) continue;
+    if (bson_iter_type(&it) == BSON_TYPE_ARRAY) continue;  // multikey deferred.
+    if (is_operator_subdoc(it)) continue;
+
+    ++indexable_count;
+    if (indexable_count > 1) return std::nullopt;
+    plan = ExactLookupPlan{std::string(key), index::IndexedValue::from_iter(it)};
+  }
+
+  if (indexable_count != 1) return std::nullopt;
+  return plan;
+}
+
 }  // namespace
 
 std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::find(
     std::span<const std::uint8_t> filter_bytes) {
+  if (auto plan = plan_exact_lookup(indexes_, filter_bytes)) {
+    const auto* slot_ids = indexes_.lookup_exact(plan->field_path, plan->key);
+    std::vector<std::size_t> snapshot;
+    if (slot_ids) snapshot = *slot_ids;
+    return std::make_unique<IndexLookupIterator>(
+        slots_, std::move(snapshot), filter_bytes);
+  }
   return std::make_unique<MemoryIterator>(slots_, filter_bytes);
 }
 

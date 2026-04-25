@@ -64,11 +64,39 @@ bool IndexManager::create(std::string name, std::string field_path) {
   return true;
 }
 
+IndexManager::Entry* IndexManager::find_by_path(std::string_view field_path) {
+  for (auto& [_, entry] : indexes_) {
+    if (entry->field_path == field_path) return entry.get();
+  }
+  return nullptr;
+}
+
+const IndexManager::Entry* IndexManager::find_by_path(
+    std::string_view field_path) const {
+  for (const auto& [_, entry] : indexes_) {
+    if (entry->field_path == field_path) return entry.get();
+  }
+  return nullptr;
+}
+
 bool IndexManager::drop(std::string_view name) {
   auto it = indexes_.find(std::string(name));
   if (it == indexes_.end()) return false;
   indexes_.erase(it);
   return true;
+}
+
+bool IndexManager::has_path(std::string_view field_path) const {
+  return find_by_path(field_path) != nullptr;
+}
+
+const std::vector<std::size_t>* IndexManager::lookup_exact(
+    std::string_view field_path, const IndexedValue& key) const {
+  const Entry* entry = find_by_path(field_path);
+  if (!entry) return nullptr;
+  auto it = entry->by_value.find(key);
+  if (it == entry->by_value.end()) return nullptr;
+  return &it->second;
 }
 
 std::vector<IndexInfo> IndexManager::list() const {
