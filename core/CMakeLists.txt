@@ -8,6 +8,9 @@ add_library(savannah_core STATIC
   src/query/update.cpp
   src/query/sort.cpp
   src/query/project.cpp
+  src/query/planner.cpp
+  src/query/expression.cpp
+  src/query/pipeline.cpp
   src/index/manager.cpp
   src/cursor_registry.cpp
 )
