@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <string>
 #include <vector>
 
@@ -69,6 +70,10 @@ class Collection {
   // The binding uses this to handle createIndex/dropIndex/listIndexes
   // without downcasting to a concrete backend.
   virtual savannah::index::IndexManager& indexes() = 0;
+
+  // Backend-owned backfill keeps the binding decoupled from slot/layout
+  // details. Memory walks tombstoned slots; LMDB will iterate its store.
+  virtual bool backfill_index(std::string_view name) = 0;
 };
 
 }  // namespace savannah::jungle::storage::v1

@@ -88,6 +88,10 @@ std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::find(
   return std::make_unique<MemoryIterator>(slots_, filter_bytes);
 }
 
+bool MemoryCollection::backfill_index(std::string_view name) {
+  return indexes_.backfill_one(name, slots_);
+}
+
 jungle::storage::v1::UpdateBatchResult MemoryCollection::update(
     std::span<const std::uint8_t> filter_bytes,
     std::span<const std::uint8_t> spec_bytes,

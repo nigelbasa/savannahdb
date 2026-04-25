@@ -78,7 +78,7 @@ class IndexManager {
   // Backfill a single named index from the live slots. Used after create()
   // to populate from existing data.
   template <typename SlotRange>
-  void backfill_one(std::string_view name, const SlotRange& slots);
+  bool backfill_one(std::string_view name, const SlotRange& slots);
 
  private:
   struct Entry {
@@ -93,14 +93,15 @@ class IndexManager {
 };
 
 template <typename SlotRange>
-void IndexManager::backfill_one(std::string_view name, const SlotRange& slots) {
+bool IndexManager::backfill_one(std::string_view name, const SlotRange& slots) {
   auto it = indexes_.find(std::string(name));
-  if (it == indexes_.end()) return;
+  if (it == indexes_.end()) return false;
   for (std::size_t i = 0; i < slots.size(); ++i) {
     const auto& slot = slots[i];
     if (slot.deleted) continue;
     on_insert(i, slot.view);  // hits all indexes; redundant but cheap.
   }
+  return true;
 }
 
 }  // namespace savannah::index

@@ -7,6 +7,9 @@ const require = createRequire(import.meta.url);
 const engine = require('../build/Release/savannah_engine.node');
 
 assert.equal(typeof engine.insert, 'function', 'engine.insert missing');
+assert.equal(typeof engine.createIndex, 'function', 'engine.createIndex missing');
+assert.equal(typeof engine.dropIndex, 'function', 'engine.dropIndex missing');
+assert.equal(typeof engine.listIndexes, 'function', 'engine.listIndexes missing');
 assert.equal(typeof engine.find, 'function', 'engine.find missing');
 assert.equal(typeof engine.getMore, 'function', 'engine.getMore missing');
 assert.equal(typeof engine.killCursors, 'function', 'engine.killCursors missing');
@@ -19,6 +22,10 @@ function findAll(db, coll, filter) {
   const { batch, cursorId } = engine.find(db, coll, filter, HUGE, EMPTY, 0, 0, EMPTY);
   assert.equal(cursorId, 0n, 'expected exhausted cursor for findAll');
   return batch;
+}
+
+function getIndexInfo(db, coll, name) {
+  return engine.listIndexes(db, coll).find((index) => index.name === name);
 }
 const ser = (o) => Buffer.from(BSON.serialize(o));
 
@@ -656,4 +663,86 @@ assert.throws(
   }
 }
 
-console.log('OK — native engine: insert/find/getMore/killCursors/update/erase + filters + nested + sort + projection');
+// ---- Slice F4: index create / drop / list ----------------------------
+{
+  // Backfill counts live scalar values only; missing fields and arrays are
+  // skipped until multikey lands alongside filter parity.
+  engine.insert('zoo', 'idx_backfill', [
+    ser({ _id: 1, species: 'lion' }),
+    ser({ _id: 2, species: 'zebra' }),
+    ser({ _id: 3 }),
+    ser({ _id: 4, species: ['herd'] }),
+  ]);
+  let r = engine.createIndex('zoo', 'idx_backfill', 'species_1', 'species');
+  assert.equal(r.created, true);
+  let info = getIndexInfo('zoo', 'idx_backfill', 'species_1');
+  assert.ok(info, 'created index must appear in listIndexes');
+  assert.equal(info.fieldPath, 'species');
+  assert.equal(info.entries, 2, 'backfill should index only live scalar values');
+
+  // Creating the index first means later inserts should auto-maintain it.
+  r = engine.createIndex('zoo', 'idx_insert', 'species_1', 'species');
+  assert.equal(r.created, true);
+  engine.insert('zoo', 'idx_insert', [
+    ser({ _id: 1, species: 'giraffe' }),
+    ser({ _id: 2, species: 'hippo' }),
+    ser({ _id: 3, species: ['skip-me'] }),
+  ]);
+  info = getIndexInfo('zoo', 'idx_insert', 'species_1');
+  assert.equal(info.entries, 2, 'insert should auto-add scalar keys');
+
+  // Update is erase old + insert new. Present->array must remove the old key,
+  // and array->scalar must re-add it through the same path.
+  r = engine.createIndex('zoo', 'idx_update', 'species_1', 'species');
+  assert.equal(r.created, true);
+  engine.insert('zoo', 'idx_update', [ser({ _id: 1, species: 'otter' })]);
+  info = getIndexInfo('zoo', 'idx_update', 'species_1');
+  assert.equal(info.entries, 1);
+  let updateRes = engine.update(
+    'zoo',
+    'idx_update',
+    ser({ _id: 1 }),
+    ser({ $set: { species: ['raft'] } }),
+    false,
+    false,
+  );
+  assert.equal(updateRes.modified, 1);
+  info = getIndexInfo('zoo', 'idx_update', 'species_1');
+  assert.equal(info.entries, 0, 'update should remove the old scalar key');
+  updateRes = engine.update(
+    'zoo',
+    'idx_update',
+    ser({ _id: 1 }),
+    ser({ $set: { species: 'seal' } }),
+    false,
+    false,
+  );
+  assert.equal(updateRes.modified, 1);
+  info = getIndexInfo('zoo', 'idx_update', 'species_1');
+  assert.equal(info.entries, 1, 'update should insert the new scalar key');
+
+  // Erase should remove matching keys from the index.
+  r = engine.createIndex('zoo', 'idx_erase', 'species_1', 'species');
+  assert.equal(r.created, true);
+  engine.insert('zoo', 'idx_erase', [
+    ser({ _id: 1, species: 'rhino' }),
+    ser({ _id: 2, species: 'rhino' }),
+  ]);
+  info = getIndexInfo('zoo', 'idx_erase', 'species_1');
+  assert.equal(info.entries, 2);
+  const eraseRes = engine.erase('zoo', 'idx_erase', ser({ _id: 1 }), true);
+  assert.equal(eraseRes.deleted, 1);
+  info = getIndexInfo('zoo', 'idx_erase', 'species_1');
+  assert.equal(info.entries, 1, 'erase should remove the deleted slot');
+
+  // Dropping the index must remove it from listIndexes entirely.
+  r = engine.createIndex('zoo', 'idx_drop', 'species_1', 'species');
+  assert.equal(r.created, true);
+  engine.insert('zoo', 'idx_drop', [ser({ _id: 1, species: 'lynx' })]);
+  assert.equal(engine.listIndexes('zoo', 'idx_drop').length, 1);
+  const dropRes = engine.dropIndex('zoo', 'idx_drop', 'species_1');
+  assert.equal(dropRes.dropped, true);
+  assert.equal(engine.listIndexes('zoo', 'idx_drop').length, 0);
+}
+
+console.log('OK — native engine: CRUD + cursors + filters + nested + sort + projection + index metadata');

@@ -2,7 +2,6 @@
 
 #include "savannah/index/manager.h"
 #include "savannah/query/sort.h"
-#include "savannah/storage/memory.h"
 #include "savannah/storage/vector_iterator.h"
 
 #include <bson/bson.h>
@@ -86,6 +85,85 @@ Napi::Value Insert(const Napi::CallbackInfo& info) {
   out.Set("insertedCount",
           Napi::Number::New(env, static_cast<double>(result.inserted_count)));
   return out;
+}
+
+Napi::Array index_infos_to_array(Napi::Env env,
+                                 const std::vector<index::IndexInfo>& indexes) {
+  Napi::Array arr = Napi::Array::New(env, indexes.size());
+  for (std::size_t i = 0; i < indexes.size(); ++i) {
+    Napi::Object obj = Napi::Object::New(env);
+    obj.Set("name", Napi::String::New(env, indexes[i].name));
+    obj.Set("fieldPath", Napi::String::New(env, indexes[i].field_path));
+    obj.Set("entries",
+            Napi::Number::New(env, static_cast<double>(indexes[i].entries)));
+    arr.Set(static_cast<std::uint32_t>(i), obj);
+  }
+  return arr;
+}
+
+// createIndex(db, coll, name, fieldPath) -> { created }
+Napi::Value CreateIndex(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4 || !info[0].IsString() || !info[1].IsString() ||
+      !info[2].IsString() || !info[3].IsString()) {
+    Napi::TypeError::New(
+        env,
+        "createIndex(db: string, coll: string, name: string, fieldPath: string)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  const std::string db = info[0].As<Napi::String>().Utf8Value();
+  const std::string coll = info[1].As<Napi::String>().Utf8Value();
+  const std::string name = info[2].As<Napi::String>().Utf8Value();
+  const std::string field_path = info[3].As<Napi::String>().Utf8Value();
+
+  auto& collection = global_engine().backend().collection(db, coll);
+  const bool created = collection.indexes().create(name, field_path);
+  if (created) collection.backfill_index(name);
+
+  Napi::Object out = Napi::Object::New(env);
+  out.Set("created", Napi::Boolean::New(env, created));
+  return out;
+}
+
+// dropIndex(db, coll, name) -> { dropped }
+Napi::Value DropIndex(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 3 || !info[0].IsString() || !info[1].IsString() ||
+      !info[2].IsString()) {
+    Napi::TypeError::New(env,
+                         "dropIndex(db: string, coll: string, name: string)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  const std::string db = info[0].As<Napi::String>().Utf8Value();
+  const std::string coll = info[1].As<Napi::String>().Utf8Value();
+  const std::string name = info[2].As<Napi::String>().Utf8Value();
+
+  auto& collection = global_engine().backend().collection(db, coll);
+  const bool dropped = collection.indexes().drop(name);
+
+  Napi::Object out = Napi::Object::New(env);
+  out.Set("dropped", Napi::Boolean::New(env, dropped));
+  return out;
+}
+
+// listIndexes(db, coll) -> Array<{ name, fieldPath, entries }>
+Napi::Value ListIndexes(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 2 || !info[0].IsString() || !info[1].IsString()) {
+    Napi::TypeError::New(env, "listIndexes(db: string, coll: string)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  const std::string db = info[0].As<Napi::String>().Utf8Value();
+  const std::string coll = info[1].As<Napi::String>().Utf8Value();
+
+  auto& collection = global_engine().backend().collection(db, coll);
+  return index_infos_to_array(env, collection.indexes().list());
 }
 
 // find(db, coll, filter, batchSize, sortSpec, skip, limit, projection)
@@ -347,6 +425,9 @@ Napi::Value KillCursors(const Napi::CallbackInfo& info) {
 
 void RegisterCollection(Napi::Env env, Napi::Object exports) {
   exports.Set("insert", Napi::Function::New(env, Insert));
+  exports.Set("createIndex", Napi::Function::New(env, CreateIndex));
+  exports.Set("dropIndex", Napi::Function::New(env, DropIndex));
+  exports.Set("listIndexes", Napi::Function::New(env, ListIndexes));
   exports.Set("find", Napi::Function::New(env, Find));
   exports.Set("getMore", Napi::Function::New(env, GetMore));
   exports.Set("killCursors", Napi::Function::New(env, KillCursors));

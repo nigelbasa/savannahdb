@@ -4,6 +4,20 @@ export interface InsertResult {
   insertedCount: number;
 }
 
+export interface CreateIndexResult {
+  created: boolean;
+}
+
+export interface DropIndexResult {
+  dropped: boolean;
+}
+
+export interface IndexInfo {
+  name: string;
+  fieldPath: string;
+  entries: number;
+}
+
 // cursorId === 0n means the iterator is exhausted. Anything else is a live
 // cursor that must be drained via getMore() or released via killCursors().
 export interface FindResult {
@@ -36,6 +50,14 @@ export interface EraseResult {
 
 export interface EngineBindings {
   insert(db: string, coll: string, docs: Uint8Array[]): InsertResult;
+  createIndex(
+    db: string,
+    coll: string,
+    name: string,
+    fieldPath: string,
+  ): CreateIndexResult;
+  dropIndex(db: string, coll: string, name: string): DropIndexResult;
+  listIndexes(db: string, coll: string): IndexInfo[];
   // Pass empty 5-byte BSON docs for `sort` / `projection` to skip them.
   // skip/limit of 0 mean "no skip / no limit". Sort or non-zero skip/limit
   // materializes the result set (streaming preserved only for pure-filter

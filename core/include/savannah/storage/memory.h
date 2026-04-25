@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -41,6 +42,7 @@ class MemoryCollection final : public jungle::storage::v1::Collection {
   // Index access — collection owns the manager. Always present (empty
   // when no indexes have been declared) so callers don't branch on null.
   index::IndexManager& indexes() override { return indexes_; }
+  bool backfill_index(std::string_view name) override;
   const std::vector<DocSlot>& slots() const { return slots_; }
 
  private:

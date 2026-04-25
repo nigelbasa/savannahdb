@@ -20,6 +20,9 @@ import { handleGetMore } from '../commands/getMore.js';
 import { handleKillCursors } from '../commands/killCursors.js';
 import { handleUpdate } from '../commands/update.js';
 import { handleDelete } from '../commands/delete.js';
+import { handleCreateIndexes } from '../commands/createIndexes.js';
+import { handleDropIndexes } from '../commands/dropIndexes.js';
+import { handleListIndexes } from '../commands/listIndexes.js';
 
 export function createServer(port: number) {
   const server = net.createServer((socket) => {
@@ -100,6 +103,12 @@ function dispatch(
       return handleEndSessions();
     case 'insert':
       return handleInsert(doc, seqs, dbName);
+    case 'createIndexes':
+      return handleCreateIndexes(doc, dbName);
+    case 'dropIndexes':
+      return handleDropIndexes(doc, dbName);
+    case 'listIndexes':
+      return handleListIndexes(doc, dbName);
     case 'find':
       return handleFind(doc, dbName);
     case 'getMore':
