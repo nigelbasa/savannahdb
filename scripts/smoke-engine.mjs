@@ -795,4 +795,58 @@ assert.throws(
   assertByteIdentical(opIdx, opScan, 'operator subdoc fallback');
 }
 
-console.log('OK — native engine: CRUD + cursors + filters + nested + sort + projection + index metadata + equality planner');
+// ---- Slice F6: range lookup via index --------------------------------
+{
+  const rangeDocs = [
+    { _id: 1, score: 5, tag: 'a' },
+    { _id: 2, score: 10, tag: 'b' },
+    { _id: 3, score: 15, tag: 'c' },
+    { _id: 4, score: 20, tag: 'd' },
+    { _id: 5, score: 'twenty-five', tag: 'e' },
+    { _id: 6, score: { value: 30 }, tag: 'f' },
+  ];
+  for (const doc of rangeDocs) {
+    const bytes = ser(doc);
+    engine.insert('zoo', 'f6_scan', [bytes]);
+    engine.insert('zoo', 'f6_idx', [bytes]);
+  }
+  let r = engine.createIndex('zoo', 'f6_idx', 'score_1', 'score');
+  assert.equal(r.created, true);
+
+  const gteLtScan = findAll('zoo', 'f6_scan', ser({ score: { $gte: 10, $lt: 20 } }));
+  const gteLtIdx = findAll('zoo', 'f6_idx', ser({ score: { $gte: 10, $lt: 20 } }));
+  assertByteIdentical(gteLtIdx, gteLtScan, 'range inclusive/exclusive parity');
+
+  const gtOnlyScan = findAll('zoo', 'f6_scan', ser({ score: { $gt: 10 } }));
+  const gtOnlyIdx = findAll('zoo', 'f6_idx', ser({ score: { $gt: 10 } }));
+  assertByteIdentical(gtOnlyIdx, gtOnlyScan, 'open-ended range parity');
+
+  // Extra non-range operators should still narrow via the range and let
+  // matches() enforce the rest.
+  const mixedOpsScan = findAll(
+    'zoo',
+    'f6_scan',
+    ser({ score: { $gte: 10, $lte: 20, $ne: 15 } }),
+  );
+  const mixedOpsIdx = findAll(
+    'zoo',
+    'f6_idx',
+    ser({ score: { $gte: 10, $lte: 20, $ne: 15 } }),
+  );
+  assertByteIdentical(mixedOpsIdx, mixedOpsScan, 'range plus residual operator parity');
+
+  // Range clause plus another non-indexed clause should still preserve parity.
+  const residualScan = findAll(
+    'zoo',
+    'f6_scan',
+    ser({ score: { $gte: 10 }, tag: 'd' }),
+  );
+  const residualIdx = findAll(
+    'zoo',
+    'f6_idx',
+    ser({ score: { $gte: 10 }, tag: 'd' }),
+  );
+  assertByteIdentical(residualIdx, residualScan, 'range clause plus residual field');
+}
+
+console.log('OK — native engine: CRUD + cursors + filters + nested + sort + projection + index metadata + equality planner + range planner');

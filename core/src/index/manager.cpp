@@ -10,6 +10,16 @@
 
 namespace savannah::index {
 
+namespace {
+
+int value_type_class(bson_iter_t it) {
+  const bson_type_t type = bson_iter_type(&it);
+  if (jungle::query::v1::is_numeric(type)) return 1;
+  return static_cast<int>(type);
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // IndexedValue
 // ---------------------------------------------------------------------------
@@ -44,10 +54,13 @@ bool IndexedValueLess::operator()(const IndexedValue& a,
     return std::lexicographical_compare(a.bytes().begin(), a.bytes().end(),
                                          b.bytes().begin(), b.bytes().end());
   }
+  const int class_a = value_type_class(ai);
+  const int class_b = value_type_class(bi);
+  if (class_a != class_b) return class_a < class_b;
   auto cmp = jungle::query::v1::value_compare(ai, bi);
   if (cmp) return *cmp < 0;
-  // Cross-type: fall back to byte ordering so the map stays well-defined.
-  // Index lookups (F5) are typed, so cross-type ordering is purely internal.
+  // Same logical class but no richer ordering (e.g. documents/arrays):
+  // fall back to raw bytes for a stable strict weak ordering.
   return std::lexicographical_compare(a.bytes().begin(), a.bytes().end(),
                                        b.bytes().begin(), b.bytes().end());
 }
@@ -97,6 +110,32 @@ const std::vector<std::size_t>* IndexManager::lookup_exact(
   auto it = entry->by_value.find(key);
   if (it == entry->by_value.end()) return nullptr;
   return &it->second;
+}
+
+std::vector<std::size_t> IndexManager::lookup_range(
+    std::string_view field_path,
+    const IndexedValue* lower_bound, bool lower_inclusive,
+    const IndexedValue* upper_bound, bool upper_inclusive) const {
+  std::vector<std::size_t> out;
+  const Entry* entry = find_by_path(field_path);
+  if (!entry) return out;
+
+  auto begin = entry->by_value.begin();
+  auto end = entry->by_value.end();
+
+  if (lower_bound) {
+    begin = lower_inclusive ? entry->by_value.lower_bound(*lower_bound)
+                            : entry->by_value.upper_bound(*lower_bound);
+  }
+  if (upper_bound) {
+    end = upper_inclusive ? entry->by_value.upper_bound(*upper_bound)
+                          : entry->by_value.lower_bound(*upper_bound);
+  }
+
+  for (auto it = begin; it != end; ++it) {
+    out.insert(out.end(), it->second.begin(), it->second.end());
+  }
+  return out;
 }
 
 std::vector<IndexInfo> IndexManager::list() const {

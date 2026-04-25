@@ -137,14 +137,108 @@ bool is_operator_subdoc(bson_iter_t value) {
   return key && key[0] == '$';
 }
 
-struct ExactLookupPlan {
-  std::string field_path;
+struct RangeBound {
   index::IndexedValue key;
+  bool inclusive{false};
 };
 
-std::optional<ExactLookupPlan> plan_exact_lookup(
-    const index::IndexManager& indexes,
-    std::span<const std::uint8_t> filter_bytes) {
+struct LookupPlan {
+  std::string field_path;
+  std::optional<index::IndexedValue> exact_key;
+  std::optional<RangeBound> lower_bound;
+  std::optional<RangeBound> upper_bound;
+};
+
+bool tighten_lower(std::optional<RangeBound>& current, bson_iter_t candidate,
+                   bool inclusive) {
+  RangeBound next{index::IndexedValue::from_iter(candidate), inclusive};
+  if (!current) {
+    current = std::move(next);
+    return true;
+  }
+
+  bson_iter_t current_it, next_it;
+  if (!current->key.get_iter(&current_it) || !next.key.get_iter(&next_it)) {
+    return false;
+  }
+  auto cmp = jungle::query::v1::value_compare(next_it, current_it);
+  if (!cmp) return false;
+  if (*cmp > 0 || (*cmp == 0 && !inclusive && current->inclusive)) {
+    current = std::move(next);
+  }
+  return true;
+}
+
+bool tighten_upper(std::optional<RangeBound>& current, bson_iter_t candidate,
+                   bool inclusive) {
+  RangeBound next{index::IndexedValue::from_iter(candidate), inclusive};
+  if (!current) {
+    current = std::move(next);
+    return true;
+  }
+
+  bson_iter_t current_it, next_it;
+  if (!current->key.get_iter(&current_it) || !next.key.get_iter(&next_it)) {
+    return false;
+  }
+  auto cmp = jungle::query::v1::value_compare(next_it, current_it);
+  if (!cmp) return false;
+  if (*cmp < 0 || (*cmp == 0 && !inclusive && current->inclusive)) {
+    current = std::move(next);
+  }
+  return true;
+}
+
+bool parse_range_operator_doc(bson_iter_t value, LookupPlan* plan) {
+  std::uint32_t len = 0;
+  const std::uint8_t* data = nullptr;
+  bson_iter_document(&value, &len, &data);
+  bson_t sub;
+  if (!bson_init_static(&sub, data, len)) return false;
+  bson_iter_t it;
+  if (!bson_iter_init(&it, &sub)) return false;
+
+  bool saw_range = false;
+  while (bson_iter_next(&it)) {
+    const char* op = bson_iter_key(&it);
+    if (!op || op[0] != '$') return false;
+    const bson_type_t type = bson_iter_type(&it);
+    if (type == BSON_TYPE_ARRAY) continue;  // multikey deferred.
+    if (std::string_view(op) == "$gt") {
+      if (!tighten_lower(plan->lower_bound, it, false)) return false;
+      saw_range = true;
+    } else if (std::string_view(op) == "$gte") {
+      if (!tighten_lower(plan->lower_bound, it, true)) return false;
+      saw_range = true;
+    } else if (std::string_view(op) == "$lt") {
+      if (!tighten_upper(plan->upper_bound, it, false)) return false;
+      saw_range = true;
+    } else if (std::string_view(op) == "$lte") {
+      if (!tighten_upper(plan->upper_bound, it, true)) return false;
+      saw_range = true;
+    }
+  }
+  if (!saw_range) return false;
+
+  if (plan->lower_bound && plan->upper_bound) {
+    bson_iter_t lower_it, upper_it;
+    if (!plan->lower_bound->key.get_iter(&lower_it) ||
+        !plan->upper_bound->key.get_iter(&upper_it)) {
+      return false;
+    }
+    auto cmp = jungle::query::v1::value_compare(lower_it, upper_it);
+    if (!cmp) return true;  // Cross-type rejected later by matches().
+    if (*cmp > 0) return false;
+    if (*cmp == 0 &&
+        (!plan->lower_bound->inclusive || !plan->upper_bound->inclusive)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<LookupPlan> plan_index_lookup(const index::IndexManager& indexes,
+                                            std::span<const std::uint8_t> filter_bytes) {
   bson_t filter;
   if (filter_bytes.size() < 5 ||
       !bson_init_static(&filter, filter_bytes.data(), filter_bytes.size())) {
@@ -154,18 +248,26 @@ std::optional<ExactLookupPlan> plan_exact_lookup(
   bson_iter_t it;
   if (!bson_iter_init(&it, &filter)) return std::nullopt;
 
-  std::optional<ExactLookupPlan> plan;
+  std::optional<LookupPlan> plan;
   std::size_t indexable_count = 0;
   while (bson_iter_next(&it)) {
     const char* key = bson_iter_key(&it);
     if (!key || key[0] == '$') continue;
     if (!indexes.has_path(key)) continue;
     if (bson_iter_type(&it) == BSON_TYPE_ARRAY) continue;  // multikey deferred.
-    if (is_operator_subdoc(it)) continue;
+
+    LookupPlan candidate;
+    candidate.field_path = key;
+
+    if (is_operator_subdoc(it)) {
+      if (!parse_range_operator_doc(it, &candidate)) continue;
+    } else {
+      candidate.exact_key = index::IndexedValue::from_iter(it);
+    }
 
     ++indexable_count;
     if (indexable_count > 1) return std::nullopt;
-    plan = ExactLookupPlan{std::string(key), index::IndexedValue::from_iter(it)};
+    plan = std::move(candidate);
   }
 
   if (indexable_count != 1) return std::nullopt;
@@ -176,10 +278,19 @@ std::optional<ExactLookupPlan> plan_exact_lookup(
 
 std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::find(
     std::span<const std::uint8_t> filter_bytes) {
-  if (auto plan = plan_exact_lookup(indexes_, filter_bytes)) {
-    const auto* slot_ids = indexes_.lookup_exact(plan->field_path, plan->key);
+  if (auto plan = plan_index_lookup(indexes_, filter_bytes)) {
     std::vector<std::size_t> snapshot;
-    if (slot_ids) snapshot = *slot_ids;
+    if (plan->exact_key) {
+      const auto* slot_ids = indexes_.lookup_exact(plan->field_path, *plan->exact_key);
+      if (slot_ids) snapshot = *slot_ids;
+    } else {
+      snapshot = indexes_.lookup_range(
+          plan->field_path,
+          plan->lower_bound ? &plan->lower_bound->key : nullptr,
+          plan->lower_bound ? plan->lower_bound->inclusive : true,
+          plan->upper_bound ? &plan->upper_bound->key : nullptr,
+          plan->upper_bound ? plan->upper_bound->inclusive : true);
+    }
     return std::make_unique<IndexLookupIterator>(
         slots_, std::move(snapshot), filter_bytes);
   }
