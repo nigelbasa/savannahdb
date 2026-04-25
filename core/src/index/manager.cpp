@@ -115,7 +115,8 @@ const std::vector<std::size_t>* IndexManager::lookup_exact(
 std::vector<std::size_t> IndexManager::lookup_range(
     std::string_view field_path,
     const IndexedValue* lower_bound, bool lower_inclusive,
-    const IndexedValue* upper_bound, bool upper_inclusive) const {
+    const IndexedValue* upper_bound, bool upper_inclusive,
+    bool descending) const {
   std::vector<std::size_t> out;
   const Entry* entry = find_by_path(field_path);
   if (!entry) return out;
@@ -132,7 +133,18 @@ std::vector<std::size_t> IndexManager::lookup_range(
                           : entry->by_value.lower_bound(*upper_bound);
   }
 
-  for (auto it = begin; it != end; ++it) {
+  if (!descending) {
+    for (auto it = begin; it != end; ++it) {
+      out.insert(out.end(), it->second.begin(), it->second.end());
+    }
+    return out;
+  }
+
+  using ConstReverseIt =
+      std::map<IndexedValue, std::vector<std::size_t>, IndexedValueLess>::const_reverse_iterator;
+  ConstReverseIt rbegin(end);
+  ConstReverseIt rend(begin);
+  for (auto it = rbegin; it != rend; ++it) {
     out.insert(out.end(), it->second.begin(), it->second.end());
   }
   return out;

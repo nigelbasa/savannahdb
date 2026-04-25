@@ -1,12 +1,10 @@
 #include "bindings.h"
 
 #include "savannah/index/manager.h"
-#include "savannah/query/sort.h"
 #include "savannah/storage/vector_iterator.h"
 
 #include <bson/bson.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -169,11 +167,8 @@ Napi::Value ListIndexes(const Napi::CallbackInfo& info) {
 // find(db, coll, filter, batchSize, sortSpec, skip, limit, projection)
 //   -> { batch: Buffer[], cursorId: BigInt }
 // sortSpec/projection are BSON docs; pass an empty 5-byte doc to skip them.
-// When any of sort/skip/limit are active we drain the full result, sort+slice
-// in memory, then wrap the materialized vector in a VectorIterator. When
-// projection is active we wrap whatever iterator results in a ProjectingIterator
-// so getMore continues to project. Streaming is preserved for filter-only
-// queries (no sort/skip/limit/projection).
+// Sorting/skip/limit planning now lives in the engine-side Collection::find.
+// Projection still wraps last in the binding so getMore keeps projecting.
 Napi::Value Find(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   if (info.Length() < 8 || !info[0].IsString() || !info[1].IsString() ||
@@ -205,47 +200,12 @@ Napi::Value Find(const Napi::CallbackInfo& info) {
   const bool has_projection =
       jungle::query::v1::has_projection(projection_span);
 
-  // An empty 5-byte sort spec ({} BSON) means "no sort". Anything with at
-  // least one key triggers the materialize path.
-  bool has_sort = false;
-  if (sort_spec.Length() >= 5) {
-    bson_t s;
-    if (bson_init_static(&s, sort_spec.Data(), sort_spec.Length())) {
-      bson_iter_t it;
-      if (bson_iter_init(&it, &s) && bson_iter_next(&it)) has_sort = true;
-    }
-  }
-  const bool needs_materialize = has_sort || skip > 0 || limit > 0;
-
   auto& engine = global_engine();
   auto& collection = engine.backend().collection(db, coll);
-  auto raw_iter = collection.find(
-      std::span<const std::uint8_t>{filter.Data(), filter.Length()});
-
-  std::unique_ptr<jungle::storage::v1::Iterator> iter;
-  if (needs_materialize) {
-    std::vector<bson::BsonView> all;
-    while (raw_iter->has_next()) all.push_back(raw_iter->next());
-
-    if (has_sort) {
-      const std::span<const std::uint8_t> spec_span{sort_spec.Data(),
-                                                     sort_spec.Length()};
-      std::stable_sort(all.begin(), all.end(),
-                       [&](const bson::BsonView& a, const bson::BsonView& b) {
-                         return jungle::query::v1::sort_less(a, b, spec_span);
-                       });
-    }
-    if (skip > 0) {
-      if (skip >= all.size()) all.clear();
-      else all.erase(all.begin(), all.begin() + skip);
-    }
-    if (limit > 0 && all.size() > limit) {
-      all.resize(limit);
-    }
-    iter = std::make_unique<storage::VectorIterator>(std::move(all));
-  } else {
-    iter = std::move(raw_iter);
-  }
+  auto iter = collection.find(
+      std::span<const std::uint8_t>{filter.Data(), filter.Length()},
+      std::span<const std::uint8_t>{sort_spec.Data(), sort_spec.Length()},
+      skip, limit);
 
   // Projection wraps last so it sees the post-sort/limit stream and rides
   // through getMore via the cursor registry.

@@ -1,8 +1,10 @@
 #include "savannah/storage/memory.h"
 
 #include "savannah/query/filter.h"
+#include "savannah/query/sort.h"
 #include "savannah/query/value.h"
 #include "savannah/query/update.h"
+#include "savannah/storage/vector_iterator.h"
 
 #include <bson/bson.h>
 
@@ -121,6 +123,41 @@ class IndexLookupIterator final : public jungle::storage::v1::Iterator {
   std::vector<std::size_t> slot_ids_;
   std::vector<std::uint8_t> filter_;
   std::size_t index_{0};
+};
+
+class SliceIterator final : public jungle::storage::v1::Iterator {
+ public:
+  SliceIterator(std::unique_ptr<jungle::storage::v1::Iterator> inner,
+                std::size_t skip, std::size_t limit)
+      : inner_(std::move(inner)), skip_(skip), remaining_(limit) {}
+
+  bool has_next() override {
+    if (!prepared_) {
+      while (skip_ > 0 && inner_->has_next()) {
+        inner_->next();
+        --skip_;
+      }
+      prepared_ = true;
+    }
+    if (remaining_ == 0) return false;
+    return inner_->has_next();
+  }
+
+  bson::BsonView next() override {
+    auto out = inner_->next();
+    if (remaining_ != unlimited()) --remaining_;
+    return out;
+  }
+
+ private:
+  static constexpr std::size_t unlimited() {
+    return static_cast<std::size_t>(-1);
+  }
+
+  std::unique_ptr<jungle::storage::v1::Iterator> inner_;
+  std::size_t skip_{0};
+  std::size_t remaining_{unlimited()};
+  bool prepared_{false};
 };
 
 bool is_operator_subdoc(bson_iter_t value) {
@@ -274,27 +311,126 @@ std::optional<LookupPlan> plan_index_lookup(const index::IndexManager& indexes,
   return plan;
 }
 
+struct SortPlan {
+  std::string field_path;
+  bool ascending{true};
+};
+
+bool has_sort_spec(std::span<const std::uint8_t> sort_bytes) {
+  if (sort_bytes.size() < 5) return false;
+  bson_t sort;
+  if (!bson_init_static(&sort, sort_bytes.data(), sort_bytes.size())) return false;
+  bson_iter_t it;
+  return bson_iter_init(&it, &sort) && bson_iter_next(&it);
+}
+
+std::optional<SortPlan> plan_index_sort(const index::IndexManager& indexes,
+                                        std::span<const std::uint8_t> sort_bytes) {
+  bson_t sort;
+  if (sort_bytes.size() < 5 ||
+      !bson_init_static(&sort, sort_bytes.data(), sort_bytes.size())) {
+    return std::nullopt;
+  }
+
+  bson_iter_t it;
+  if (!bson_iter_init(&it, &sort) || !bson_iter_next(&it)) return std::nullopt;
+  const char* key = bson_iter_key(&it);
+  if (!key || !indexes.has_path(key)) return std::nullopt;
+
+  bool ascending = true;
+  if (jungle::query::v1::is_numeric(bson_iter_type(&it))) {
+    ascending = bson_iter_as_int64(&it) >= 0;
+  }
+
+  // F7 only supports single-key index-backed sorts.
+  if (bson_iter_next(&it)) return std::nullopt;
+  return SortPlan{std::string(key), ascending};
+}
+
+std::unique_ptr<jungle::storage::v1::Iterator> make_slice_iterator(
+    std::unique_ptr<jungle::storage::v1::Iterator> inner,
+    std::size_t skip, std::size_t limit) {
+  if (skip == 0 && limit == 0) return inner;
+  return std::make_unique<SliceIterator>(
+      std::move(inner), skip, limit == 0 ? static_cast<std::size_t>(-1) : limit);
+}
+
+std::vector<std::size_t> snapshot_from_lookup_plan(
+    const index::IndexManager& indexes, const LookupPlan& plan) {
+  if (plan.exact_key) {
+    const auto* slot_ids = indexes.lookup_exact(plan.field_path, *plan.exact_key);
+    return slot_ids ? *slot_ids : std::vector<std::size_t>{};
+  }
+  return indexes.lookup_range(
+      plan.field_path,
+      plan.lower_bound ? &plan.lower_bound->key : nullptr,
+      plan.lower_bound ? plan.lower_bound->inclusive : true,
+      plan.upper_bound ? &plan.upper_bound->key : nullptr,
+      plan.upper_bound ? plan.upper_bound->inclusive : true,
+      false);
+}
+
+std::unique_ptr<jungle::storage::v1::Iterator> make_filter_iterator(
+    const std::vector<DocSlot>& slots, const index::IndexManager& indexes,
+    std::span<const std::uint8_t> filter_bytes) {
+  auto plan = plan_index_lookup(indexes, filter_bytes);
+  if (!plan) return std::make_unique<MemoryIterator>(slots, filter_bytes);
+  return std::make_unique<IndexLookupIterator>(
+      slots, snapshot_from_lookup_plan(indexes, *plan), filter_bytes);
+}
+
 }  // namespace
 
 std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::find(
-    std::span<const std::uint8_t> filter_bytes) {
-  if (auto plan = plan_index_lookup(indexes_, filter_bytes)) {
+    std::span<const std::uint8_t> filter_bytes,
+    std::span<const std::uint8_t> sort_bytes,
+    std::size_t skip, std::size_t limit) {
+  if (auto sort_plan = plan_index_sort(indexes_, sort_bytes)) {
     std::vector<std::size_t> snapshot;
-    if (plan->exact_key) {
-      const auto* slot_ids = indexes_.lookup_exact(plan->field_path, *plan->exact_key);
-      if (slot_ids) snapshot = *slot_ids;
+    if (auto filter_plan = plan_index_lookup(indexes_, filter_bytes);
+        filter_plan && filter_plan->field_path == sort_plan->field_path) {
+      if (filter_plan->exact_key) {
+        const auto* slot_ids = indexes_.lookup_exact(
+            filter_plan->field_path, *filter_plan->exact_key);
+        if (slot_ids) snapshot = *slot_ids;
+      } else {
+        snapshot = indexes_.lookup_range(
+            filter_plan->field_path,
+            filter_plan->lower_bound ? &filter_plan->lower_bound->key : nullptr,
+            filter_plan->lower_bound ? filter_plan->lower_bound->inclusive : true,
+            filter_plan->upper_bound ? &filter_plan->upper_bound->key : nullptr,
+            filter_plan->upper_bound ? filter_plan->upper_bound->inclusive : true,
+            !sort_plan->ascending);
+      }
     } else {
       snapshot = indexes_.lookup_range(
-          plan->field_path,
-          plan->lower_bound ? &plan->lower_bound->key : nullptr,
-          plan->lower_bound ? plan->lower_bound->inclusive : true,
-          plan->upper_bound ? &plan->upper_bound->key : nullptr,
-          plan->upper_bound ? plan->upper_bound->inclusive : true);
+          sort_plan->field_path, nullptr, true, nullptr, true,
+          !sort_plan->ascending);
     }
-    return std::make_unique<IndexLookupIterator>(
+    auto iter = std::make_unique<IndexLookupIterator>(
         slots_, std::move(snapshot), filter_bytes);
+    return make_slice_iterator(std::move(iter), skip, limit);
   }
-  return std::make_unique<MemoryIterator>(slots_, filter_bytes);
+
+  if (has_sort_spec(sort_bytes)) {
+    std::vector<bson::BsonView> all;
+    auto base = make_filter_iterator(slots_, indexes_, filter_bytes);
+    while (base->has_next()) all.push_back(base->next());
+
+    std::stable_sort(all.begin(), all.end(),
+                     [&](const bson::BsonView& a, const bson::BsonView& b) {
+                       return jungle::query::v1::sort_less(a, b, sort_bytes);
+                     });
+    if (skip > 0) {
+      if (skip >= all.size()) all.clear();
+      else all.erase(all.begin(), all.begin() + skip);
+    }
+    if (limit > 0 && all.size() > limit) all.resize(limit);
+    return std::make_unique<VectorIterator>(std::move(all));
+  }
+
+  auto iter = make_filter_iterator(slots_, indexes_, filter_bytes);
+  return make_slice_iterator(std::move(iter), skip, limit);
 }
 
 bool MemoryCollection::backfill_index(std::string_view name) {

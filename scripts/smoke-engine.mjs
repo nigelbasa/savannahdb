@@ -849,4 +849,100 @@ assert.throws(
   assertByteIdentical(residualIdx, residualScan, 'range clause plus residual field');
 }
 
-console.log('OK — native engine: CRUD + cursors + filters + nested + sort + projection + index metadata + equality planner + range planner');
+// ---- Slice F7: index-backed sort -------------------------------------
+{
+  const sortDocs = [
+    { _id: 1, age: 30, name: 'a', habitat: 'yard' },
+    { _id: 2, age: 20, name: 'b', habitat: 'yard' },
+    { _id: 3, age: 30, name: 'c', habitat: 'barn' },
+    { _id: 4, age: 10, name: 'd', habitat: 'barn' },
+    { _id: 5, age: 40, name: 'e', habitat: 'yard' },
+  ];
+  for (const doc of sortDocs) {
+    const bytes = ser(doc);
+    engine.insert('zoo', 'f7_scan', [bytes]);
+    engine.insert('zoo', 'f7_idx', [bytes]);
+  }
+  let r = engine.createIndex('zoo', 'f7_idx', 'age_1', 'age');
+  assert.equal(r.created, true);
+
+  const ascScan = findAll('zoo', 'f7_scan', ser({}));
+  const ascIdx = engine.find('zoo', 'f7_idx', ser({}), HUGE, ser({ age: 1 }), 0, 0, EMPTY).batch;
+  const ascScanSorted = engine.find('zoo', 'f7_scan', ser({}), HUGE, ser({ age: 1 }), 0, 0, EMPTY).batch;
+  assertByteIdentical(ascIdx, ascScanSorted, 'indexed ascending sort parity');
+
+  const descIdx = engine.find('zoo', 'f7_idx', ser({}), HUGE, ser({ age: -1 }), 0, 0, EMPTY).batch;
+  const descScan = engine.find('zoo', 'f7_scan', ser({}), HUGE, ser({ age: -1 }), 0, 0, EMPTY).batch;
+  assertByteIdentical(descIdx, descScan, 'indexed descending sort parity');
+
+  // Same-field range + sort can combine bounds with traversal direction.
+  const rangeSortIdx = engine.find(
+    'zoo',
+    'f7_idx',
+    ser({ age: { $gte: 20, $lt: 40 } }),
+    HUGE,
+    ser({ age: 1 }),
+    0,
+    0,
+    EMPTY,
+  ).batch;
+  const rangeSortScan = engine.find(
+    'zoo',
+    'f7_scan',
+    ser({ age: { $gte: 20, $lt: 40 } }),
+    HUGE,
+    ser({ age: 1 }),
+    0,
+    0,
+    EMPTY,
+  ).batch;
+  assertByteIdentical(rangeSortIdx, rangeSortScan, 'same-field range plus sort parity');
+
+  // Different-field filter still streams in index sort order and lets matches filter.
+  const otherFieldIdx = engine.find(
+    'zoo',
+    'f7_idx',
+    ser({ habitat: 'yard' }),
+    HUGE,
+    ser({ age: 1 }),
+    0,
+    0,
+    EMPTY,
+  ).batch;
+  const otherFieldScan = engine.find(
+    'zoo',
+    'f7_scan',
+    ser({ habitat: 'yard' }),
+    HUGE,
+    ser({ age: 1 }),
+    0,
+    0,
+    EMPTY,
+  ).batch;
+  assertByteIdentical(otherFieldIdx, otherFieldScan, 'different-field filter plus sort parity');
+
+  // Skip/limit now live in the engine path too and must preserve parity.
+  const windowIdx = engine.find(
+    'zoo',
+    'f7_idx',
+    ser({}),
+    HUGE,
+    ser({ age: 1 }),
+    1,
+    2,
+    EMPTY,
+  ).batch;
+  const windowScan = engine.find(
+    'zoo',
+    'f7_scan',
+    ser({}),
+    HUGE,
+    ser({ age: 1 }),
+    1,
+    2,
+    EMPTY,
+  ).batch;
+  assertByteIdentical(windowIdx, windowScan, 'engine-side skip/limit parity');
+}
+
+console.log('OK — native engine: CRUD + cursors + filters + nested + sort + projection + index metadata + equality planner + range planner + index sort');

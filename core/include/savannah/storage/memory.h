@@ -29,7 +29,9 @@ class MemoryCollection final : public jungle::storage::v1::Collection {
       std::span<const bson::BsonView> docs) override;
 
   std::unique_ptr<jungle::storage::v1::Iterator> find(
-      std::span<const std::uint8_t> filter_bytes) override;
+      std::span<const std::uint8_t> filter_bytes,
+      std::span<const std::uint8_t> sort_bytes,
+      std::size_t skip, std::size_t limit) override;
 
   jungle::storage::v1::UpdateBatchResult update(
       std::span<const std::uint8_t> filter_bytes,

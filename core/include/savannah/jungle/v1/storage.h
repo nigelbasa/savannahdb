@@ -52,7 +52,9 @@ class Collection {
   virtual InsertResult insert(std::span<const bson::BsonView> docs) = 0;
 
   virtual std::unique_ptr<Iterator> find(
-      std::span<const std::uint8_t> filter_bytes) = 0;
+      std::span<const std::uint8_t> filter_bytes,
+      std::span<const std::uint8_t> sort_bytes,
+      std::size_t skip, std::size_t limit) = 0;
 
   // Apply `spec` (operator-style or replacement) to docs matching `filter`.
   // multi=false stops at the first match. upsert=true seeds + inserts a new

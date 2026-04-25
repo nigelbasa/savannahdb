@@ -74,7 +74,8 @@ class IndexManager {
   std::vector<std::size_t> lookup_range(
       std::string_view field_path,
       const IndexedValue* lower_bound, bool lower_inclusive,
-      const IndexedValue* upper_bound, bool upper_inclusive) const;
+      const IndexedValue* upper_bound, bool upper_inclusive,
+      bool descending) const;
 
   // Walk every index and add the doc's value(s). Caller passes the slot
   // index so the index can record where the doc lives. Array-valued paths
