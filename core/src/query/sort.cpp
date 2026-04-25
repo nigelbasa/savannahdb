@@ -1,0 +1,65 @@
+#include "savannah/query/sort.h"
+
+#include "savannah/query/value.h"
+
+#include <bson/bson.h>
+
+#include <cstdint>
+#include <cstring>
+#include <optional>
+#include <string_view>
+
+namespace savannah::jungle::query::v1 {
+
+namespace {
+
+bool resolve_view(bson::BsonView doc, const char* path, bson_iter_t* out) {
+  bson_t d;
+  if (!bson_init_static(&d, doc.data(), doc.size())) return false;
+  return resolve_path(d, path, out);
+}
+
+// Per-key compare with missing-field semantics: in ascending, missing < present.
+int compare_for_key(bson::BsonView a, bson::BsonView b, const char* path,
+                    bool ascending) {
+  bson_iter_t ai;
+  bson_iter_t bi;
+  const bool pa = resolve_view(a, path, &ai);
+  const bool pb = resolve_view(b, path, &bi);
+
+  if (!pa && !pb) return 0;
+  if (!pa) return ascending ? -1 : 1;  // missing first asc, last desc
+  if (!pb) return ascending ? 1 : -1;
+
+  auto cmp = value_compare(ai, bi);  // shared with filter — single semantics
+  if (!cmp) return 0;  // cross-type → defer to next key
+  return ascending ? *cmp : -*cmp;
+}
+
+}  // namespace
+
+bool sort_less(bson::BsonView a, bson::BsonView b,
+               std::span<const std::uint8_t> sort_spec) {
+  bson_t spec;
+  if (sort_spec.size() < 5 ||
+      !bson_init_static(&spec, sort_spec.data(), sort_spec.size())) {
+    return false;
+  }
+  bson_iter_t it;
+  if (!bson_iter_init(&it, &spec)) return false;
+
+  while (bson_iter_next(&it)) {
+    const char* path = bson_iter_key(&it);
+    if (!path) continue;
+    // Direction: 1 ascending, -1 descending. Anything else treated as asc.
+    bool ascending = true;
+    if (is_numeric(bson_iter_type(&it))) {
+      ascending = bson_iter_as_int64(&it) >= 0;
+    }
+    const int c = compare_for_key(a, b, path, ascending);
+    if (c != 0) return c < 0;
+  }
+  return false;  // equal under all keys → stable_sort preserves order.
+}
+
+}  // namespace savannah::jungle::query::v1
