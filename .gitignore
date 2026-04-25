@@ -4,3 +4,8 @@ build/
 *.node
 *.log
 .DS_Store
+
+# Transient run output captured during local testing.
+server_run.*
+*.out
+*.err
