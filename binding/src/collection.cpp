@@ -228,6 +228,44 @@ Napi::Value Find(const Napi::CallbackInfo& info) {
   return out;
 }
 
+// aggregate(db, coll, pipeline, batchSize) -> { batch: Buffer[], cursorId: BigInt }
+// `pipeline` is a BSON wrapper doc of the form `{ pipeline: [ ... ] }`.
+Napi::Value Aggregate(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4 || !info[0].IsString() || !info[1].IsString() ||
+      !info[2].IsBuffer() || !info[3].IsNumber()) {
+    Napi::TypeError::New(env,
+                         "aggregate(db, coll, pipeline: Buffer, batchSize: number)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  const std::string db = info[0].As<Napi::String>().Utf8Value();
+  const std::string coll = info[1].As<Napi::String>().Utf8Value();
+  auto pipeline = info[2].As<Napi::Buffer<std::uint8_t>>();
+  const std::int64_t batch_size_signed = info[3].As<Napi::Number>().Int64Value();
+  const std::size_t batch_size =
+      batch_size_signed > 0 ? static_cast<std::size_t>(batch_size_signed) : 0;
+
+  auto& engine = global_engine();
+  auto& collection = engine.backend().collection(db, coll);
+  auto iter = collection.aggregate(
+      std::span<const std::uint8_t>{pipeline.Data(), pipeline.Length()});
+
+  std::vector<bson::BsonView> batch;
+  const bool more = drain_batch(*iter, batch_size, batch);
+
+  std::int64_t cursor_id = 0;
+  if (more) {
+    cursor_id = engine.cursors().register_cursor(std::move(iter), make_ns(db, coll));
+  }
+
+  Napi::Object out = Napi::Object::New(env);
+  out.Set("batch", views_to_array(env, batch));
+  out.Set("cursorId", Napi::BigInt::New(env, cursor_id));
+  return out;
+}
+
 // getMore(cursorId: BigInt, db, coll, batchSize)
 //   -> { batch: Buffer[], cursorId: BigInt }
 // Returns cursorId=0n if exhausted. If cursorId is unknown OR the registered
@@ -389,6 +427,7 @@ void RegisterCollection(Napi::Env env, Napi::Object exports) {
   exports.Set("dropIndex", Napi::Function::New(env, DropIndex));
   exports.Set("listIndexes", Napi::Function::New(env, ListIndexes));
   exports.Set("find", Napi::Function::New(env, Find));
+  exports.Set("aggregate", Napi::Function::New(env, Aggregate));
   exports.Set("getMore", Napi::Function::New(env, GetMore));
   exports.Set("killCursors", Napi::Function::New(env, KillCursors));
   exports.Set("update", Napi::Function::New(env, Update));

@@ -145,6 +145,195 @@ try {
     nested.find({}, { projection: { pop: 1, _id: 0 } }).toArray(),
   );
   if (projected) console.log('  projected keys:', Object.keys(projected[0]).sort());
+
+  // Phase 0.4: aggregation pipeline.
+  const agg = zoo.collection('agg');
+  await safe('insertMany aggregate source', () =>
+    agg.insertMany([
+      { kind: 'cat', score: 2 },
+      { kind: 'cat', score: 5 },
+      { kind: 'dog', score: 3 },
+    ]),
+  );
+  const counted = await safe('countDocuments', () => agg.countDocuments({ kind: 'cat' }));
+  if (typeof counted === 'number') console.log('  countDocuments:', counted);
+
+  const grouped = await safe('aggregate $match+$group', () =>
+    agg.aggregate([
+      { $match: { kind: 'cat' } },
+      { $group: { _id: '$kind', total: { $sum: 1 } } },
+    ]).toArray(),
+  );
+  if (grouped) console.log('  grouped:', JSON.stringify(grouped));
+
+  const groupedStats = await safe('aggregate group accumulators', () =>
+    agg.aggregate([
+      {
+        $sort: { score: 1 },
+      },
+      {
+        $group: {
+          _id: '$kind',
+          minScore: { $min: '$score' },
+          maxScore: { $max: '$score' },
+          avgScore: { $avg: '$score' },
+          lastScore: { $last: '$score' },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]).toArray(),
+  );
+  if (groupedStats) console.log('  grouped stats:', JSON.stringify(groupedStats));
+
+  const sortedWindow = await safe('aggregate $sort+$skip+$limit', () =>
+    agg.aggregate([
+      { $sort: { score: -1 } },
+      { $skip: 1 },
+      { $limit: 1 },
+    ]).toArray(),
+  );
+  if (sortedWindow) console.log('  sorted window:', JSON.stringify(sortedWindow));
+
+  const projectedAgg = await safe('aggregate $project', () =>
+    agg.aggregate([
+      {
+        $project: {
+          _id: 0,
+          kind: 1,
+          renamedScore: '$score',
+          tag: 'seen',
+        },
+      },
+    ]).toArray(),
+  );
+  if (projectedAgg) console.log('  projected aggregate:', JSON.stringify(projectedAgg));
+
+  const expressionDepth = await safe('aggregate expression depth', () =>
+    agg.aggregate([
+      {
+        $project: {
+          _id: 0,
+          label: { $concat: ['$kind', ':', { $toString: '$score' }] },
+          fallback: { $ifNull: ['$missing', 'fallback'] },
+        },
+      },
+      { $sort: { label: 1 } },
+    ]).toArray(),
+  );
+  if (expressionDepth) console.log('  expression depth:', JSON.stringify(expressionDepth));
+
+  const addFieldsAgg = await safe('aggregate $set+$unset+$count', () =>
+    agg.aggregate([
+      { $set: { renamedKind: '$kind', seen: true } },
+      { $unset: ['kind', 'score'] },
+      { $match: { renamedKind: 'cat' } },
+      { $count: 'totalCats' },
+    ]).toArray(),
+  );
+  if (addFieldsAgg) console.log('  set/unset/count:', JSON.stringify(addFieldsAgg));
+
+  const arrayExpressions = await safe('aggregate array expressions', () =>
+    agg.aggregate([
+      {
+        $addFields: {
+          bundle: ['$kind', '$score'],
+          maybeScore: { $ifNull: ['$score', 0] },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          firstItem: { $arrayElemAt: ['$bundle', 0] },
+          bundleSize: { $size: '$bundle' },
+          maybeScore: 1,
+          literalDollar: { $literal: '$score' },
+        },
+      },
+      { $sort: { firstItem: 1, maybeScore: 1 } },
+    ]).toArray(),
+  );
+  if (arrayExpressions) console.log('  array expressions:', JSON.stringify(arrayExpressions));
+
+  const sortByCountAgg = await safe('aggregate $sortByCount', () =>
+    agg.aggregate([
+      { $sortByCount: '$kind' },
+    ]).toArray(),
+  );
+  if (sortByCountAgg) console.log('  sortByCount:', JSON.stringify(sortByCountAgg));
+
+  const aggregateCursor = await safe('aggregate cursor getMore', async () => {
+    const cursor = agg.aggregate(
+      [{ $sort: { score: 1 } }],
+      { cursor: { batchSize: 1 } },
+    );
+    const docs = await cursor.toArray();
+    return docs;
+  });
+  if (aggregateCursor) console.log('  aggregate cursor total:', aggregateCursor.length);
+
+  const unwindSource = zoo.collection('unwind_cases');
+  await safe('insertMany unwind cases', () =>
+    unwindSource.insertMany([
+      { name: 'alpha', tags: ['x', 'y'] },
+      { name: 'beta', tags: [] },
+      { name: 'gamma' },
+    ]),
+  );
+  const unwindOptions = await safe('aggregate $unwind options', () =>
+    unwindSource.aggregate([
+      {
+        $unwind: {
+          path: '$tags',
+          preserveNullAndEmptyArrays: true,
+          includeArrayIndex: 'tagIndex',
+        },
+      },
+      { $project: { _id: 0, name: 1, tags: 1, tagIndex: 1 } },
+      { $sort: { name: 1, tagIndex: 1 } },
+    ]).toArray(),
+  );
+  if (unwindOptions) console.log('  unwind options:', JSON.stringify(unwindOptions));
+
+  const owners = zoo.collection('owners');
+  const pets = zoo.collection('pets');
+  const ownerIds = (await safe('insertMany owners', () =>
+    owners.insertMany([{ name: 'alice' }, { name: 'bob' }]),
+  ))?.insertedIds;
+  if (ownerIds) {
+    await safe('insertMany pets', () =>
+      pets.insertMany([
+        { ownerId: ownerIds[0], name: 'milo' },
+        { ownerId: ownerIds[0], name: 'otis' },
+        { ownerId: ownerIds[1], name: 'luna' },
+      ]),
+    );
+    const joined = await safe('aggregate $lookup+$unwind', () =>
+      owners.aggregate([
+        { $lookup: { from: 'pets', localField: '_id', foreignField: 'ownerId', as: 'pets' } },
+        { $unwind: '$pets' },
+        { $match: { 'pets.name': 'milo' } },
+        { $project: { _id: 0, owner: '$name', pet: '$pets.name' } },
+      ]).toArray(),
+    );
+    if (joined) console.log('  lookup+unwind:', JSON.stringify(joined));
+
+    const replaced = await safe('aggregate $replaceRoot/$replaceWith', () =>
+      owners.aggregate([
+        { $lookup: { from: 'pets', localField: '_id', foreignField: 'ownerId', as: 'pets' } },
+        { $unwind: '$pets' },
+        { $replaceRoot: { newRoot: '$pets' } },
+        { $match: { name: 'milo' } },
+        {
+          $replaceWith: {
+            petName: '$name',
+            ownerRef: '$ownerId',
+            summary: { $concat: ['$name', ':', { $toString: '$ownerId' }] },
+          },
+        },
+      ]).toArray(),
+    );
+    if (replaced) console.log('  replaceRoot/replaceWith:', JSON.stringify(replaced));
+  }
 } catch (e) {
   console.error('DRIVER ERROR:', e.message);
   process.exitCode = 1;

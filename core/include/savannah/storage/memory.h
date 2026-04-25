@@ -23,7 +23,8 @@ struct DocSlot {
 
 class MemoryCollection final : public jungle::storage::v1::Collection {
  public:
-  explicit MemoryCollection(Arena& arena) : arena_(arena) {}
+  MemoryCollection(Arena& arena, IStorageBackend& owner, std::string db_name)
+      : arena_(arena), owner_(owner), db_name_(std::move(db_name)) {}
 
   jungle::storage::v1::InsertResult insert(
       std::span<const bson::BsonView> docs) override;
@@ -32,6 +33,9 @@ class MemoryCollection final : public jungle::storage::v1::Collection {
       std::span<const std::uint8_t> filter_bytes,
       std::span<const std::uint8_t> sort_bytes,
       std::size_t skip, std::size_t limit) override;
+
+  std::unique_ptr<jungle::storage::v1::Iterator> aggregate(
+      std::span<const std::uint8_t> pipeline_bytes) override;
 
   jungle::storage::v1::UpdateBatchResult update(
       std::span<const std::uint8_t> filter_bytes,
@@ -49,6 +53,8 @@ class MemoryCollection final : public jungle::storage::v1::Collection {
 
  private:
   Arena& arena_;
+  IStorageBackend& owner_;
+  std::string db_name_;
   std::vector<DocSlot> slots_;
   index::IndexManager indexes_;
 };

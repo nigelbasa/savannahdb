@@ -56,6 +56,12 @@ class Collection {
       std::span<const std::uint8_t> sort_bytes,
       std::size_t skip, std::size_t limit) = 0;
 
+  // Aggregation pipeline entry point. Returns an iterator over owned BSON
+  // result docs so getMore can stream transformed batches the same way it
+  // streams find() results.
+  virtual std::unique_ptr<Iterator> aggregate(
+      std::span<const std::uint8_t> pipeline_bytes) = 0;
+
   // Apply `spec` (operator-style or replacement) to docs matching `filter`.
   // multi=false stops at the first match. upsert=true seeds + inserts a new
   // doc if no docs match (using literal filter clauses + spec).

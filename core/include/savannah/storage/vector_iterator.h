@@ -32,6 +32,26 @@ class VectorIterator final : public jungle::storage::v1::Iterator {
   std::size_t index_{0};
 };
 
+// Iterator over owned BSON byte buffers. Used by aggregation where stage
+// output no longer points at arena-owned slot bytes from the source store.
+class OwnedBytesIterator final : public jungle::storage::v1::Iterator {
+ public:
+  explicit OwnedBytesIterator(std::vector<std::vector<std::uint8_t>> docs)
+      : docs_(std::move(docs)) {}
+
+  bool has_next() override { return index_ < docs_.size(); }
+
+  bson::BsonView next() override {
+    auto& bytes = docs_[index_++];
+    return bson::BsonView(
+        std::span<const std::uint8_t>{bytes.data(), bytes.size()});
+  }
+
+ private:
+  std::vector<std::vector<std::uint8_t>> docs_;
+  std::size_t index_{0};
+};
+
 // Wraps another iterator and projects each yielded doc. Owns the projected
 // bytes in a deque so addresses stay stable across pushes — the BsonView
 // returned from next() points into the deque entry and is valid for the

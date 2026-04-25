@@ -23,6 +23,7 @@ import { handleDelete } from '../commands/delete.js';
 import { handleCreateIndexes } from '../commands/createIndexes.js';
 import { handleDropIndexes } from '../commands/dropIndexes.js';
 import { handleListIndexes } from '../commands/listIndexes.js';
+import { handleAggregate } from '../commands/aggregate.js';
 
 export function createServer(port: number) {
   const server = net.createServer((socket) => {
@@ -111,6 +112,8 @@ function dispatch(
       return handleListIndexes(doc, dbName);
     case 'find':
       return handleFind(doc, dbName);
+    case 'aggregate':
+      return handleAggregate(doc, dbName);
     case 'getMore':
       return handleGetMore(doc, dbName);
     case 'killCursors':

@@ -73,6 +73,12 @@ export interface EngineBindings {
     limit: number,
     projection: Uint8Array,
   ): FindResult;
+  aggregate(
+    db: string,
+    coll: string,
+    pipeline: Uint8Array,
+    batchSize: number,
+  ): FindResult;
   getMore(
     cursorId: bigint,
     db: string,

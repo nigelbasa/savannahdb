@@ -1,0 +1,9 @@
+SavannahDB listening on 27017
+[conn 1] connected ::ffff:127.0.0.1:61498
+[conn 2] connected ::ffff:127.0.0.1:61499
+[conn 1] closed
+[conn 2] closed
+[conn 3] connected ::ffff:127.0.0.1:61503
+[conn 4] connected ::ffff:127.0.0.1:61504
+[conn 3] closed
+[conn 4] closed
