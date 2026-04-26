@@ -14,6 +14,9 @@ add_library(savannah_core STATIC
   src/query/pipeline/match.cpp
   src/query/pipeline/shaping.cpp
   src/query/pipeline/project.cpp
+  src/query/pipeline/group.cpp
+  src/query/pipeline/lookup.cpp
+  src/query/pipeline/unwind.cpp
   src/index/manager.cpp
   src/cursor_registry.cpp
 )

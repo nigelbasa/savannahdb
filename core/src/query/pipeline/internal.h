@@ -68,9 +68,22 @@ std::vector<std::vector<std::uint8_t>> apply_replace_root_stage(
     const std::vector<std::vector<std::uint8_t>>& docs,
     const std::vector<std::uint8_t>& expr_bytes);
 
-// $group, $sortByCount, $lookup, $unwind still live in dispatch.cpp during
-// Pass A of the pipeline split — they share gnarly helpers that aren't
-// worth extracting until the simple stages are out of the way. Pass B
-// promotes them to their own files and adds the forward declarations here.
+// Stages whose helpers are gnarly enough to deserve their own TU.
+
+std::vector<std::vector<std::uint8_t>> apply_group_stage(
+    const std::vector<std::vector<std::uint8_t>>& docs,
+    std::span<const std::uint8_t> spec_bytes);
+
+std::vector<std::vector<std::uint8_t>> apply_sort_by_count_stage(
+    const std::vector<std::vector<std::uint8_t>>& docs,
+    const std::vector<std::uint8_t>& expr_bytes);
+
+std::vector<std::vector<std::uint8_t>> apply_lookup_stage(
+    const std::vector<std::vector<std::uint8_t>>& docs, const bson_t& spec,
+    ::savannah::storage::IStorageBackend& owner, std::string_view db_name);
+
+std::vector<std::vector<std::uint8_t>> apply_unwind_stage(
+    const std::vector<std::vector<std::uint8_t>>& docs, const bson_t& spec,
+    bool spec_is_string);
 
 }  // namespace savannah::jungle::query::v1
