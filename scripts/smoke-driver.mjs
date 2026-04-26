@@ -320,6 +320,35 @@ try {
   );
   if (typeOps) console.log('  type ops:', JSON.stringify(typeOps));
 
+  const arrayMath = await safe('aggregate array+math ops', () =>
+    agg.aggregate([
+      { $sort: { score: 1 } },
+      { $limit: 1 },
+      {
+        $project: {
+          _id: 0,
+          summed: { $sum: [1, 2, 3, 4] },
+          summedField: { $sum: '$score' },
+          averaged: { $avg: [10, 20, 30] },
+          minVal: { $min: [3, 1, 2] },
+          maxVal: { $max: [3, 1, 2] },
+          power: { $pow: [2, 8] },
+          rooted: { $sqrt: 16 },
+          logBase: { $log: [100, 10] },
+          merged: { $concatArrays: [[1, 2], [3, 4]] },
+          sliced: { $slice: [[10, 20, 30, 40], 1, 2] },
+          ranged: { $range: [0, 5] },
+          contains: { $in: ['cat', ['dog', 'cat', 'bird']] },
+          isArr: { $isArray: [1, 2, 3] },
+          firstEl: { $first: [10, 20, 30] },
+          lastEl: { $last: [10, 20, 30] },
+          reversed: { $reverseArray: [1, 2, 3] },
+        },
+      },
+    ]).toArray(),
+  );
+  if (arrayMath) console.log('  array+math:', JSON.stringify(arrayMath));
+
   const addFieldsAgg = await safe('aggregate $set+$unset+$count', () =>
     agg.aggregate([
       { $set: { renamedKind: '$kind', seen: true } },

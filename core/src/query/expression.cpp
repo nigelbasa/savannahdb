@@ -813,6 +813,341 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
     return wrap_bool(is_numeric(bson_iter_type(&it)));
   }
 
+  // Aggregator-as-expression + math -----------------------------------------
+  //
+  // $sum/$avg/$min/$max also exist as $group accumulators (in group.cpp).
+  // The expression form takes a single arg that resolves to either a
+  // numeric or an array of values, and folds across that array.
+  // [<e1>, <e2>, ...] also works because evaluate_expression on an array
+  // literal returns an evaluated array.
+
+  auto fold_array = [&](auto on_each) -> bool {
+    auto value = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!value) return false;
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*value, &holder, &it)) return false;
+    if (bson_iter_type(&it) == BSON_TYPE_ARRAY) {
+      std::uint32_t alen = 0;
+      const std::uint8_t* adata = nullptr;
+      bson_iter_array(&it, &alen, &adata);
+      bson_t arr;
+      if (!bson_init_static(&arr, adata, alen)) return false;
+      bson_iter_t ait;
+      if (!bson_iter_init(&ait, &arr)) return false;
+      while (bson_iter_next(&ait)) on_each(ait);
+    } else {
+      on_each(it);
+    }
+    return true;
+  };
+
+  if (std::string_view(op) == "$sum") {
+    bool any_double = false;
+    double acc_d = 0.0;
+    std::int64_t acc_i = 0;
+    if (!fold_array([&](bson_iter_t it) {
+      if (!is_numeric(bson_iter_type(&it))) return;  // skip non-numeric
+      if (bson_iter_type(&it) == BSON_TYPE_DOUBLE) any_double = true;
+      acc_d += bson_iter_as_double(&it);
+      acc_i += bson_iter_as_int64(&it);
+    })) return wrap_int64(0);
+    return any_double ? wrap_double(acc_d) : wrap_int64(acc_i);
+  }
+
+  if (std::string_view(op) == "$avg") {
+    double sum = 0.0;
+    std::int64_t count = 0;
+    if (!fold_array([&](bson_iter_t it) {
+      if (!is_numeric(bson_iter_type(&it))) return;
+      sum += bson_iter_as_double(&it);
+      ++count;
+    })) return wrap_null();
+    if (count == 0) return wrap_null();
+    return wrap_double(sum / static_cast<double>(count));
+  }
+
+  if (std::string_view(op) == "$min" || std::string_view(op) == "$max") {
+    const bool want_min = std::string_view(op) == "$min";
+    std::vector<std::uint8_t> best;
+    bool seen = false;
+    if (!fold_array([&](bson_iter_t it) {
+      if (bson_iter_type(&it) == BSON_TYPE_NULL) return;
+      auto wrapped = wrap_iter_value(it);
+      if (!seen) { best = std::move(wrapped); seen = true; return; }
+      bson_t hb, hc;
+      bson_iter_t ib, ic;
+      if (!unwrap_iter(best, &hb, &ib) || !unwrap_iter(wrapped, &hc, &ic)) return;
+      auto cmp = value_compare(ic, ib);
+      if (!cmp) return;
+      if (( want_min && *cmp < 0) || (!want_min && *cmp > 0)) best = std::move(wrapped);
+    })) return wrap_null();
+    if (!seen) return wrap_null();
+    return best;
+  }
+
+  if (std::string_view(op) == "$pow") {
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() != 2) return wrap_null();
+    bson_t hb, he;
+    bson_iter_t ib, ie;
+    if (!unwrap_iter(args[0], &hb, &ib) || !unwrap_iter(args[1], &he, &ie)) return wrap_null();
+    if (!is_numeric(bson_iter_type(&ib)) || !is_numeric(bson_iter_type(&ie))) return wrap_null();
+    return wrap_double(std::pow(bson_iter_as_double(&ib), bson_iter_as_double(&ie)));
+  }
+
+  if (std::string_view(op) == "$sqrt" || std::string_view(op) == "$exp" ||
+      std::string_view(op) == "$ln" || std::string_view(op) == "$log10") {
+    auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!v || nullish_wrapped(*v)) return wrap_null();
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*v, &holder, &it)) return wrap_null();
+    if (!is_numeric(bson_iter_type(&it))) return wrap_null();
+    const double d = bson_iter_as_double(&it);
+    if (std::string_view(op) == "$sqrt")  return wrap_double(std::sqrt(d));
+    if (std::string_view(op) == "$exp")   return wrap_double(std::exp(d));
+    if (std::string_view(op) == "$ln")    return wrap_double(std::log(d));
+    return wrap_double(std::log10(d));
+  }
+
+  if (std::string_view(op) == "$log") {
+    // [number, base] — log base `base` of number.
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() != 2) return wrap_null();
+    bson_t hn, hb;
+    bson_iter_t in, ib;
+    if (!unwrap_iter(args[0], &hn, &in) || !unwrap_iter(args[1], &hb, &ib)) return wrap_null();
+    if (!is_numeric(bson_iter_type(&in)) || !is_numeric(bson_iter_type(&ib))) return wrap_null();
+    return wrap_double(std::log(bson_iter_as_double(&in)) /
+                       std::log(bson_iter_as_double(&ib)));
+  }
+
+  // Array helpers ------------------------------------------------------------
+
+  if (std::string_view(op) == "$concatArrays") {
+    // Args is an array of arrays; concatenate in order. Any non-array → null.
+    if (bson_iter_type(&op_it) != BSON_TYPE_ARRAY) return wrap_null();
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    bson_t built;
+    bson_init(&built);
+    bson_t arr;
+    bson_append_array_begin(&built, "v", -1, &arr);
+    std::size_t out_idx = 0;
+    for (const auto& w : args) {
+      if (w.empty() || nullish_wrapped(w)) {
+        bson_append_array_end(&built, &arr);
+        bson_destroy(&built);
+        return wrap_null();
+      }
+      bson_t holder;
+      bson_iter_t it;
+      if (!unwrap_iter(w, &holder, &it) || bson_iter_type(&it) != BSON_TYPE_ARRAY) {
+        bson_append_array_end(&built, &arr);
+        bson_destroy(&built);
+        return wrap_null();
+      }
+      std::uint32_t alen = 0;
+      const std::uint8_t* adata = nullptr;
+      bson_iter_array(&it, &alen, &adata);
+      bson_t inner;
+      if (!bson_init_static(&inner, adata, alen)) continue;
+      bson_iter_t iit;
+      if (!bson_iter_init(&iit, &inner)) continue;
+      while (bson_iter_next(&iit)) {
+        const std::string key = std::to_string(out_idx++);
+        bson_append_iter(&arr, key.c_str(), -1, &iit);
+      }
+    }
+    bson_append_array_end(&built, &arr);
+    auto out = bytes_from_bson(built);
+    bson_destroy(&built);
+    return out;
+  }
+
+  if (std::string_view(op) == "$slice") {
+    // [array, n] OR [array, position, n]. Negative n in 2-arg form means
+    // last |n| elements; in 3-arg form n is always non-negative count.
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() < 2 || args.size() > 3 || args[0].empty()) return wrap_null();
+    bson_t harr;
+    bson_iter_t iarr;
+    if (!unwrap_iter(args[0], &harr, &iarr) || bson_iter_type(&iarr) != BSON_TYPE_ARRAY) {
+      return wrap_null();
+    }
+    std::uint32_t alen = 0;
+    const std::uint8_t* adata = nullptr;
+    bson_iter_array(&iarr, &alen, &adata);
+    bson_t inner;
+    if (!bson_init_static(&inner, adata, alen)) return wrap_null();
+    std::vector<std::vector<std::uint8_t>> elems;
+    bson_iter_t it;
+    if (bson_iter_init(&it, &inner)) {
+      while (bson_iter_next(&it)) elems.push_back(wrap_iter_value(it));
+    }
+    const std::int64_t total = static_cast<std::int64_t>(elems.size());
+
+    std::int64_t start = 0;
+    std::int64_t count = 0;
+    if (args.size() == 2) {
+      bson_t hn;
+      bson_iter_t in;
+      if (!unwrap_iter(args[1], &hn, &in) || !is_numeric(bson_iter_type(&in))) return wrap_null();
+      const std::int64_t n = bson_iter_as_int64(&in);
+      if (n >= 0) { start = 0; count = std::min(n, total); }
+      else        { start = std::max<std::int64_t>(0, total + n); count = total - start; }
+    } else {
+      bson_t hp, hn;
+      bson_iter_t ip, in;
+      if (!unwrap_iter(args[1], &hp, &ip) || !unwrap_iter(args[2], &hn, &in)) return wrap_null();
+      if (!is_numeric(bson_iter_type(&ip)) || !is_numeric(bson_iter_type(&in))) return wrap_null();
+      const std::int64_t pos = bson_iter_as_int64(&ip);
+      start = pos < 0 ? std::max<std::int64_t>(0, total + pos) : std::min(pos, total);
+      count = std::min(bson_iter_as_int64(&in), total - start);
+      if (count < 0) count = 0;
+    }
+
+    bson_t built;
+    bson_init(&built);
+    bson_t out_arr;
+    bson_append_array_begin(&built, "v", -1, &out_arr);
+    for (std::int64_t i = 0; i < count; ++i) {
+      append_wrapped_array_item(&out_arr, static_cast<std::size_t>(i),
+                                elems[static_cast<std::size_t>(start + i)]);
+    }
+    bson_append_array_end(&built, &out_arr);
+    auto bytes = bytes_from_bson(built);
+    bson_destroy(&built);
+    return bytes;
+  }
+
+  if (std::string_view(op) == "$range") {
+    // [start, end, step?] — step defaults to 1. step must be non-zero.
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() < 2 || args.size() > 3) return wrap_null();
+    auto get_int = [&](const std::vector<std::uint8_t>& w, std::int64_t* out) {
+      bson_t h;
+      bson_iter_t it;
+      if (!unwrap_iter(w, &h, &it) || !is_numeric(bson_iter_type(&it))) return false;
+      *out = bson_iter_as_int64(&it);
+      return true;
+    };
+    std::int64_t start = 0, end = 0, step = 1;
+    if (!get_int(args[0], &start) || !get_int(args[1], &end)) return wrap_null();
+    if (args.size() == 3 && !get_int(args[2], &step)) return wrap_null();
+    if (step == 0) return wrap_null();
+
+    bson_t built;
+    bson_init(&built);
+    bson_t arr;
+    bson_append_array_begin(&built, "v", -1, &arr);
+    std::size_t idx = 0;
+    if (step > 0) {
+      for (std::int64_t v = start; v < end; v += step) {
+        const std::string key = std::to_string(idx++);
+        bson_append_int64(&arr, key.c_str(), -1, v);
+      }
+    } else {
+      for (std::int64_t v = start; v > end; v += step) {
+        const std::string key = std::to_string(idx++);
+        bson_append_int64(&arr, key.c_str(), -1, v);
+      }
+    }
+    bson_append_array_end(&built, &arr);
+    auto bytes = bytes_from_bson(built);
+    bson_destroy(&built);
+    return bytes;
+  }
+
+  if (std::string_view(op) == "$in") {
+    // [value, array] → bool
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() != 2 || args[1].empty()) return wrap_bool(false);
+    bson_t harr;
+    bson_iter_t iarr;
+    if (!unwrap_iter(args[1], &harr, &iarr) || bson_iter_type(&iarr) != BSON_TYPE_ARRAY) {
+      return wrap_bool(false);
+    }
+    if (args[0].empty()) return wrap_bool(false);
+    bson_t hv;
+    bson_iter_t iv;
+    if (!unwrap_iter(args[0], &hv, &iv)) return wrap_bool(false);
+    std::uint32_t alen = 0;
+    const std::uint8_t* adata = nullptr;
+    bson_iter_array(&iarr, &alen, &adata);
+    bson_t inner;
+    if (!bson_init_static(&inner, adata, alen)) return wrap_bool(false);
+    bson_iter_t it;
+    if (!bson_iter_init(&it, &inner)) return wrap_bool(false);
+    while (bson_iter_next(&it)) {
+      // Re-init iv each iteration because value_equal may consume state
+      // implicitly (libbson iterators are stateful but copy-by-value here).
+      bson_iter_t iv_copy = iv;
+      if (value_equal(iv_copy, it)) return wrap_bool(true);
+    }
+    return wrap_bool(false);
+  }
+
+  if (std::string_view(op) == "$isArray") {
+    auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!v) return wrap_bool(false);
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*v, &holder, &it)) return wrap_bool(false);
+    return wrap_bool(bson_iter_type(&it) == BSON_TYPE_ARRAY);
+  }
+
+  if (std::string_view(op) == "$first" || std::string_view(op) == "$last") {
+    auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!v || nullish_wrapped(*v)) return wrap_null();
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*v, &holder, &it)) return wrap_null();
+    if (bson_iter_type(&it) != BSON_TYPE_ARRAY) return wrap_null();
+    std::uint32_t alen = 0;
+    const std::uint8_t* adata = nullptr;
+    bson_iter_array(&it, &alen, &adata);
+    bson_t inner;
+    if (!bson_init_static(&inner, adata, alen)) return wrap_null();
+    std::vector<std::vector<std::uint8_t>> items;
+    bson_iter_t iit;
+    if (bson_iter_init(&iit, &inner)) {
+      while (bson_iter_next(&iit)) items.push_back(wrap_iter_value(iit));
+    }
+    if (items.empty()) return wrap_null();
+    return std::string_view(op) == "$first" ? items.front() : items.back();
+  }
+
+  if (std::string_view(op) == "$reverseArray") {
+    auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!v || nullish_wrapped(*v)) return wrap_null();
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*v, &holder, &it)) return wrap_null();
+    if (bson_iter_type(&it) != BSON_TYPE_ARRAY) return wrap_null();
+    std::uint32_t alen = 0;
+    const std::uint8_t* adata = nullptr;
+    bson_iter_array(&it, &alen, &adata);
+    bson_t inner;
+    if (!bson_init_static(&inner, adata, alen)) return wrap_null();
+    std::vector<std::vector<std::uint8_t>> items;
+    bson_iter_t iit;
+    if (bson_iter_init(&iit, &inner)) {
+      while (bson_iter_next(&iit)) items.push_back(wrap_iter_value(iit));
+    }
+    bson_t built;
+    bson_init(&built);
+    bson_t out_arr;
+    bson_append_array_begin(&built, "v", -1, &out_arr);
+    for (std::size_t i = 0; i < items.size(); ++i) {
+      append_wrapped_array_item(&out_arr, i, items[items.size() - 1 - i]);
+    }
+    bson_append_array_end(&built, &out_arr);
+    auto bytes = bytes_from_bson(built);
+    bson_destroy(&built);
+    return bytes;
+  }
+
   if (std::string_view(op) == "$arrayElemAt") {
     const auto args = evaluate_array_elements(source_doc, op_it);
     if (args.size() < 2 || args[0].empty() || args[1].empty()) return std::nullopt;
