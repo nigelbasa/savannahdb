@@ -463,6 +463,130 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
     return wrap_bool(*cmp <= 0);  // $lte
   }
 
+  // Conditional --------------------------------------------------------------
+  //
+  // Drivers (and most real aggregations) lean on $cond and $switch to
+  // shape per-doc output. Truthiness uses is_truthy_for_expr — null/0/
+  // false → false, everything else → true.
+
+  if (std::string_view(op) == "$cond") {
+    // {if, then, else} object form OR [if, then, else] array form.
+    std::vector<std::vector<std::uint8_t>> branches;
+    if (bson_iter_type(&op_it) == BSON_TYPE_DOCUMENT) {
+      std::uint32_t len = 0;
+      const std::uint8_t* data = nullptr;
+      bson_iter_document(&op_it, &len, &data);
+      bson_t obj;
+      if (!bson_init_static(&obj, data, len)) return std::nullopt;
+      bson_iter_t f;
+      std::vector<std::uint8_t> if_e, then_e, else_e;
+      if (bson_iter_init_find(&f, &obj, "if")) if_e = wrap_iter_value(f);
+      if (bson_iter_init_find(&f, &obj, "then")) then_e = wrap_iter_value(f);
+      if (bson_iter_init_find(&f, &obj, "else")) else_e = wrap_iter_value(f);
+      if (if_e.empty() || then_e.empty() || else_e.empty()) return std::nullopt;
+      auto cond = evaluate_expression(source_doc, if_e);
+      if (!cond) return std::nullopt;
+      return evaluate_expression(source_doc,
+                                 is_truthy_for_expr(*cond) ? then_e : else_e);
+    }
+    if (bson_iter_type(&op_it) == BSON_TYPE_ARRAY) {
+      std::uint32_t len = 0;
+      const std::uint8_t* data = nullptr;
+      bson_iter_array(&op_it, &len, &data);
+      bson_t arr;
+      if (!bson_init_static(&arr, data, len)) return std::nullopt;
+      bson_iter_t it;
+      if (!bson_iter_init(&it, &arr)) return std::nullopt;
+      std::vector<std::vector<std::uint8_t>> raw;
+      while (bson_iter_next(&it)) raw.push_back(wrap_iter_value(it));
+      if (raw.size() != 3) return std::nullopt;
+      auto cond = evaluate_expression(source_doc, raw[0]);
+      if (!cond) return std::nullopt;
+      return evaluate_expression(source_doc,
+                                 is_truthy_for_expr(*cond) ? raw[1] : raw[2]);
+    }
+    return std::nullopt;
+  }
+
+  if (std::string_view(op) == "$switch") {
+    // {branches: [{case, then}, ...], default?}
+    if (bson_iter_type(&op_it) != BSON_TYPE_DOCUMENT) return std::nullopt;
+    std::uint32_t len = 0;
+    const std::uint8_t* data = nullptr;
+    bson_iter_document(&op_it, &len, &data);
+    bson_t obj;
+    if (!bson_init_static(&obj, data, len)) return std::nullopt;
+    bson_iter_t branches_it;
+    if (!bson_iter_init_find(&branches_it, &obj, "branches") ||
+        bson_iter_type(&branches_it) != BSON_TYPE_ARRAY) return std::nullopt;
+    std::uint32_t blen = 0;
+    const std::uint8_t* bdata = nullptr;
+    bson_iter_array(&branches_it, &blen, &bdata);
+    bson_t barr;
+    if (!bson_init_static(&barr, bdata, blen)) return std::nullopt;
+    bson_iter_t bit;
+    if (!bson_iter_init(&bit, &barr)) return std::nullopt;
+    while (bson_iter_next(&bit)) {
+      if (bson_iter_type(&bit) != BSON_TYPE_DOCUMENT) continue;
+      std::uint32_t blen2 = 0;
+      const std::uint8_t* bdata2 = nullptr;
+      bson_iter_document(&bit, &blen2, &bdata2);
+      bson_t branch;
+      if (!bson_init_static(&branch, bdata2, blen2)) continue;
+      bson_iter_t case_it, then_it;
+      if (!bson_iter_init_find(&case_it, &branch, "case") ||
+          !bson_iter_init_find(&then_it, &branch, "then")) continue;
+      auto case_v = evaluate_expression(source_doc, wrap_iter_value(case_it));
+      if (case_v && is_truthy_for_expr(*case_v)) {
+        return evaluate_expression(source_doc, wrap_iter_value(then_it));
+      }
+    }
+    bson_iter_t def;
+    if (bson_iter_init_find(&def, &obj, "default")) {
+      return evaluate_expression(source_doc, wrap_iter_value(def));
+    }
+    return std::nullopt;  // no match, no default → Mongo throws; we surface missing
+  }
+
+  // Boolean (expression form, returns bool) ----------------------------------
+
+  if (std::string_view(op) == "$and" || std::string_view(op) == "$or") {
+    if (bson_iter_type(&op_it) != BSON_TYPE_ARRAY) return wrap_bool(false);
+    std::uint32_t alen = 0;
+    const std::uint8_t* adata = nullptr;
+    bson_iter_array(&op_it, &alen, &adata);
+    bson_t arr;
+    if (!bson_init_static(&arr, adata, alen)) return wrap_bool(false);
+    bson_iter_t it;
+    if (!bson_iter_init(&it, &arr)) return wrap_bool(false);
+    const bool is_and = std::string_view(op) == "$and";
+    bool any = false;
+    while (bson_iter_next(&it)) {
+      any = true;
+      auto v = evaluate_expression(source_doc, wrap_iter_value(it));
+      const bool t = v && is_truthy_for_expr(*v);
+      if (is_and && !t) return wrap_bool(false);
+      if (!is_and && t) return wrap_bool(true);
+    }
+    // $and on empty array → true; $or on empty array → false (per Mongo).
+    return wrap_bool(is_and ? true : false);
+  }
+
+  if (std::string_view(op) == "$not") {
+    // {$not: expr} or {$not: [expr]}; both forms common in the wild.
+    std::vector<std::uint8_t> arg;
+    if (bson_iter_type(&op_it) == BSON_TYPE_ARRAY) {
+      const auto args = evaluate_array_elements(source_doc, op_it);
+      if (args.size() != 1) return wrap_bool(false);
+      arg = args[0];
+    } else {
+      auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
+      if (!v) return wrap_bool(true);  // missing → !falsy → true
+      arg = *v;
+    }
+    return wrap_bool(!is_truthy_for_expr(arg));
+  }
+
   if (std::string_view(op) == "$arrayElemAt") {
     const auto args = evaluate_array_elements(source_doc, op_it);
     if (args.size() < 2 || args[0].empty() || args[1].empty()) return std::nullopt;

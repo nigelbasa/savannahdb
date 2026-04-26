@@ -245,6 +245,39 @@ try {
   );
   if (arithmetic) console.log('  arithmetic:', JSON.stringify(arithmetic));
 
+  const conditional = await safe('aggregate conditional+boolean', () =>
+    agg.aggregate([
+      { $sort: { score: 1 } },
+      {
+        $project: {
+          _id: 0,
+          kind: 1,
+          score: 1,
+          tier: {
+            $cond: {
+              if: { $gte: ['$score', 5] },
+              then: 'high',
+              else: 'low',
+            },
+          },
+          bucket: {
+            $switch: {
+              branches: [
+                { case: { $lt: ['$score', 3] }, then: 'small' },
+                { case: { $lt: ['$score', 5] }, then: 'medium' },
+              ],
+              default: 'large',
+            },
+          },
+          isCatHigh: { $and: [{ $eq: ['$kind', 'cat'] }, { $gte: ['$score', 5] }] },
+          catOrLow: { $or: [{ $eq: ['$kind', 'cat'] }, { $lt: ['$score', 3] }] },
+          notCat: { $not: { $eq: ['$kind', 'cat'] } },
+        },
+      },
+    ]).toArray(),
+  );
+  if (conditional) console.log('  conditional:', JSON.stringify(conditional));
+
   const addFieldsAgg = await safe('aggregate $set+$unset+$count', () =>
     agg.aggregate([
       { $set: { renamedKind: '$kind', seen: true } },
