@@ -587,6 +587,140 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
     return wrap_bool(!is_truthy_for_expr(arg));
   }
 
+  // String -------------------------------------------------------------------
+  //
+  // String semantics here are byte-oriented (UTF-8 byte length, not code
+  // points). Mongo distinguishes $substrCP/$substrBytes and
+  // $strLenCP/$strLenBytes; we collapse the CP variants to byte semantics
+  // until a driver actually exercises a multi-byte character. Smoke
+  // checks the byte-orientation explicitly so the assumption is visible.
+
+  auto eval_string_arg = [&](bson_iter_t it) -> std::optional<std::string> {
+    auto v = evaluate_expression(source_doc, wrap_iter_value(it));
+    if (!v || nullish_wrapped(*v)) return std::nullopt;
+    bson_t holder;
+    bson_iter_t value_it;
+    if (!unwrap_iter(*v, &holder, &value_it)) return std::nullopt;
+    if (bson_iter_type(&value_it) != BSON_TYPE_UTF8) return std::nullopt;
+    std::uint32_t len = 0;
+    const char* text = bson_iter_utf8(&value_it, &len);
+    return std::string(text, len);
+  };
+
+  if (std::string_view(op) == "$toLower" || std::string_view(op) == "$toUpper") {
+    auto s = eval_string_arg(op_it);
+    if (!s) return wrap_utf8("");  // Mongo: null/missing → "" for case ops
+    const bool to_lower = std::string_view(op) == "$toLower";
+    for (auto& c : *s) {
+      // ASCII-only fold; full Unicode case mapping is out of scope. Drivers
+      // that need locale-aware folding can do it client-side.
+      if (to_lower && c >= 'A' && c <= 'Z') c = c + 32;
+      if (!to_lower && c >= 'a' && c <= 'z') c = c - 32;
+    }
+    return wrap_utf8(*s);
+  }
+
+  if (std::string_view(op) == "$trim") {
+    // {$trim: {input, chars?}} — chars defaults to whitespace. Bare
+    // {$trim: "$x"} also works as a string shorthand.
+    std::string input;
+    std::string chars = " \t\n\r\f\v";
+    if (bson_iter_type(&op_it) == BSON_TYPE_DOCUMENT) {
+      std::uint32_t len = 0;
+      const std::uint8_t* data = nullptr;
+      bson_iter_document(&op_it, &len, &data);
+      bson_t obj;
+      if (!bson_init_static(&obj, data, len)) return wrap_null();
+      bson_iter_t f;
+      if (!bson_iter_init_find(&f, &obj, "input")) return wrap_null();
+      auto v = eval_string_arg(f);
+      if (!v) return wrap_null();
+      input = *v;
+      if (bson_iter_init_find(&f, &obj, "chars")) {
+        auto cv = eval_string_arg(f);
+        if (cv) chars = *cv;
+      }
+    } else {
+      auto v = eval_string_arg(op_it);
+      if (!v) return wrap_null();
+      input = *v;
+    }
+    const auto first = input.find_first_not_of(chars);
+    if (first == std::string::npos) return wrap_utf8("");
+    const auto last = input.find_last_not_of(chars);
+    return wrap_utf8(input.substr(first, last - first + 1));
+  }
+
+  if (std::string_view(op) == "$substr" || std::string_view(op) == "$substrBytes" ||
+      std::string_view(op) == "$substrCP") {
+    // [string, start, length]; length=-1 means "to end of string".
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() != 3 || args[0].empty()) return wrap_utf8("");
+    bson_t hs, hb, hl;
+    bson_iter_t is, ib, il;
+    if (!unwrap_iter(args[0], &hs, &is) ||
+        !unwrap_iter(args[1], &hb, &ib) ||
+        !unwrap_iter(args[2], &hl, &il)) return wrap_utf8("");
+    if (bson_iter_type(&is) != BSON_TYPE_UTF8) return wrap_utf8("");
+    if (!is_numeric(bson_iter_type(&ib)) || !is_numeric(bson_iter_type(&il))) {
+      return wrap_utf8("");
+    }
+    std::uint32_t slen = 0;
+    const char* text = bson_iter_utf8(&is, &slen);
+    const std::int64_t start = bson_iter_as_int64(&ib);
+    const std::int64_t length = bson_iter_as_int64(&il);
+    if (start < 0 || start >= static_cast<std::int64_t>(slen)) return wrap_utf8("");
+    const std::int64_t avail = static_cast<std::int64_t>(slen) - start;
+    const std::int64_t take = (length < 0 || length > avail) ? avail : length;
+    return wrap_utf8(std::string_view(text + start, static_cast<std::size_t>(take)));
+  }
+
+  if (std::string_view(op) == "$split") {
+    // [string, delimiter] — returns an array of substrings.
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() != 2) return wrap_null();
+    bson_t hs, hd;
+    bson_iter_t is, id;
+    if (!unwrap_iter(args[0], &hs, &is) || !unwrap_iter(args[1], &hd, &id)) {
+      return wrap_null();
+    }
+    if (bson_iter_type(&is) != BSON_TYPE_UTF8 ||
+        bson_iter_type(&id) != BSON_TYPE_UTF8) return wrap_null();
+    std::uint32_t slen = 0, dlen = 0;
+    const char* str = bson_iter_utf8(&is, &slen);
+    const char* delim = bson_iter_utf8(&id, &dlen);
+    const std::string_view input(str, slen);
+    const std::string_view sep(delim, dlen);
+    if (sep.empty()) return wrap_null();
+
+    bson_t built;
+    bson_init(&built);
+    bson_t arr;
+    bson_append_array_begin(&built, "v", -1, &arr);
+    std::size_t pos = 0;
+    std::size_t idx = 0;
+    while (true) {
+      const auto next = input.find(sep, pos);
+      const auto piece = input.substr(pos,
+          next == std::string_view::npos ? std::string_view::npos : next - pos);
+      const std::string key = std::to_string(idx++);
+      bson_append_utf8(&arr, key.c_str(), -1, piece.data(),
+                       static_cast<int>(piece.size()));
+      if (next == std::string_view::npos) break;
+      pos = next + sep.size();
+    }
+    bson_append_array_end(&built, &arr);
+    auto out = bytes_from_bson(built);
+    bson_destroy(&built);
+    return out;
+  }
+
+  if (std::string_view(op) == "$strLenCP" || std::string_view(op) == "$strLenBytes") {
+    auto s = eval_string_arg(op_it);
+    if (!s) return std::nullopt;
+    return wrap_int64(static_cast<std::int64_t>(s->size()));
+  }
+
   if (std::string_view(op) == "$arrayElemAt") {
     const auto args = evaluate_array_elements(source_doc, op_it);
     if (args.size() < 2 || args[0].empty() || args[1].empty()) return std::nullopt;

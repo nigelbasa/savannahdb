@@ -278,6 +278,26 @@ try {
   );
   if (conditional) console.log('  conditional:', JSON.stringify(conditional));
 
+  const stringOps = await safe('aggregate string ops', () =>
+    agg.aggregate([
+      { $sort: { score: 1 } },
+      { $limit: 1 },
+      {
+        $project: {
+          _id: 0,
+          upper: { $toUpper: '$kind' },
+          lower: { $toLower: 'CAT' },
+          trimmed: { $trim: { input: '  hello  ' } },
+          trimChars: { $trim: { input: '--cat--', chars: '-' } },
+          first3: { $substr: ['$kind', 0, 3] },
+          parts: { $split: ['a,b,c', ','] },
+          len: { $strLenCP: '$kind' },
+        },
+      },
+    ]).toArray(),
+  );
+  if (stringOps) console.log('  string ops:', JSON.stringify(stringOps));
+
   const addFieldsAgg = await safe('aggregate $set+$unset+$count', () =>
     agg.aggregate([
       { $set: { renamedKind: '$kind', seen: true } },
