@@ -1,16 +1,15 @@
-#include "savannah/query/pipeline.h"
+#include "internal.h"
 
+#include "savannah/bson/document.h"
 #include "savannah/query/expression.h"
 #include "savannah/query/filter.h"
-#include "savannah/query/project.h"
-#include "savannah/query/sort.h"
+#include "savannah/query/pipeline.h"
 #include "savannah/query/value.h"
 
 #include <bson/bson.h>
 
 #include <algorithm>
 #include <cstdint>
-#include <cstring>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -21,15 +20,27 @@
 #include <utility>
 #include <vector>
 
+// Pipeline dispatcher.
+//
+// run_pipeline parses the wire-format pipeline array, then for each stage
+// hands the doc set to an apply_*_stage function. Simple stages live in
+// their own translation units (match.cpp, shaping.cpp, project.cpp) and
+// reach this file via internal.h forward declarations.
+//
+// Pass A of the pipeline split kept the gnarlier stages — $group,
+// $sortByCount, $lookup, $unwind — co-located with the dispatcher because
+// they share private helpers (clone_doc_with_array_field,
+// clone_doc_with_replaced_field, compare_wrapped_values) that aren't worth
+// promoting into internal.h until those stages move out together. Pass B
+// will lift them into pipeline/{group,lookup,unwind}.cpp.
+
 namespace savannah::jungle::query::v1 {
 
-namespace {
-
-// top_level_only: many stages reject dotted output paths until Phase 0.4+
-// ships subdoc rebuilding for projection/$set/$unset/$unwind targets.
 bool top_level_only(std::string_view path) {
   return path.find('.') == std::string_view::npos;
 }
+
+namespace {
 
 std::vector<std::vector<std::uint8_t>> snapshot_iterator(
     jungle::storage::v1::Iterator& iter) {
@@ -106,238 +117,6 @@ std::vector<std::uint8_t> clone_doc_with_replaced_field(
   auto bytes = bytes_from_bson(out);
   bson_destroy(&out);
   return bytes;
-}
-
-std::vector<std::uint8_t> clone_doc_with_projection(
-    std::span<const std::uint8_t> source_bytes, std::span<const std::uint8_t> spec_bytes) {
-  bson_t spec;
-  bson_t source;
-  bson_init_static(&spec, spec_bytes.data(), spec_bytes.size());
-  bson_init_static(&source, source_bytes.data(), source_bytes.size());
-
-  bool computed = false;
-  bson_iter_t sit;
-  bson_iter_init(&sit, &spec);
-  while (bson_iter_next(&sit)) {
-    const char* key = bson_iter_key(&sit);
-    if (!key || std::string_view(key) == "_id") continue;
-    const auto type = bson_iter_type(&sit);
-    const bool simple_bool = type == BSON_TYPE_BOOL || type == BSON_TYPE_INT32 ||
-                             type == BSON_TYPE_INT64 || type == BSON_TYPE_DOUBLE;
-    if (simple_bool) continue;
-    computed = true;
-    break;
-  }
-  if (!computed) {
-    return jungle::query::v1::project(
-        bson::BsonView(source_bytes), spec_bytes);
-  }
-
-  bool include_id = true;
-  bool saw_exclusion = false;
-  bson_iter_init(&sit, &spec);
-  while (bson_iter_next(&sit)) {
-    const char* key = bson_iter_key(&sit);
-    if (!key) continue;
-    if (std::string_view(key) == "_id") {
-      include_id = is_truthy_projection_value(sit);
-      continue;
-    }
-    const auto type = bson_iter_type(&sit);
-    const bool numeric_bool_projection =
-        type == BSON_TYPE_BOOL || type == BSON_TYPE_INT32 ||
-        type == BSON_TYPE_INT64 || type == BSON_TYPE_DOUBLE;
-    if (numeric_bool_projection && !is_truthy_projection_value(sit)) {
-      saw_exclusion = true;
-    }
-  }
-  if (saw_exclusion) {
-    throw std::runtime_error("computed $project cannot mix inclusion and exclusion");
-  }
-
-  bson_t out;
-  bson_init(&out);
-  if (include_id) {
-    bson_iter_t id_it;
-    if (bson_iter_init_find(&id_it, &source, "_id")) {
-      bson_append_iter(&out, "_id", -1, &id_it);
-    }
-  }
-
-  bson_iter_init(&sit, &spec);
-  while (bson_iter_next(&sit)) {
-    const char* key = bson_iter_key(&sit);
-    if (!key || std::string_view(key) == "_id") continue;
-    if (!top_level_only(key)) {
-      throw std::runtime_error("aggregate output dotted paths not implemented");
-    }
-    if (is_truthy_projection_value(sit)) {
-      bson_iter_t value_it;
-      if (jungle::query::v1::resolve_path(source, key, &value_it)) {
-        bson_append_iter(&out, key, -1, &value_it);
-      }
-      continue;
-    }
-    auto evaluated = evaluate_expression(source, wrap_iter_value(sit));
-    if (!evaluated) continue;
-    append_wrapped_value(&out, key, *evaluated);
-  }
-
-  auto bytes = bytes_from_bson(out);
-  bson_destroy(&out);
-  return bytes;
-}
-
-std::vector<std::uint8_t> clone_doc_with_add_fields(
-    std::span<const std::uint8_t> source_bytes,
-    std::span<const std::uint8_t> spec_bytes) {
-  bson_t source;
-  bson_t spec;
-  bson_init_static(&source, source_bytes.data(), source_bytes.size());
-  bson_init_static(&spec, spec_bytes.data(), spec_bytes.size());
-
-  bson_t out;
-  bson_init(&out);
-  bson_iter_t it;
-  bson_iter_init(&it, &source);
-  while (bson_iter_next(&it)) {
-    const char* key = bson_iter_key(&it);
-    if (!key) continue;
-    bson_append_iter(&out, key, -1, &it);
-  }
-
-  bson_iter_t sit;
-  bson_iter_init(&sit, &spec);
-  while (bson_iter_next(&sit)) {
-    const char* key = bson_iter_key(&sit);
-    if (!key) continue;
-    if (!top_level_only(key)) {
-      throw std::runtime_error("aggregate output dotted paths not implemented");
-    }
-    auto value = evaluate_expression(source, wrap_iter_value(sit));
-    if (!value) continue;
-    append_wrapped_value(&out, key, *value);
-  }
-
-  auto bytes = bytes_from_bson(out);
-  bson_destroy(&out);
-  return bytes;
-}
-
-std::vector<std::uint8_t> clone_doc_with_unset_fields(
-    std::span<const std::uint8_t> source_bytes,
-    const std::unordered_set<std::string>& fields) {
-  bson_t source;
-  bson_init_static(&source, source_bytes.data(), source_bytes.size());
-
-  bson_t out;
-  bson_init(&out);
-  bson_iter_t it;
-  bson_iter_init(&it, &source);
-  while (bson_iter_next(&it)) {
-    const char* key = bson_iter_key(&it);
-    if (!key || fields.contains(std::string(key))) continue;
-    bson_append_iter(&out, key, -1, &it);
-  }
-
-  auto bytes = bytes_from_bson(out);
-  bson_destroy(&out);
-  return bytes;
-}
-
-std::vector<std::vector<std::uint8_t>> apply_match_stage(
-    const std::vector<std::vector<std::uint8_t>>& docs,
-    std::span<const std::uint8_t> spec_bytes) {
-  std::vector<std::vector<std::uint8_t>> out;
-  for (const auto& doc : docs) {
-    if (jungle::query::v1::matches(
-            bson::BsonView(std::span<const std::uint8_t>{doc.data(), doc.size()}),
-            spec_bytes)) {
-      out.push_back(doc);
-    }
-  }
-  return out;
-}
-
-std::vector<std::vector<std::uint8_t>> apply_sort_stage(
-    std::vector<std::vector<std::uint8_t>> docs,
-    std::span<const std::uint8_t> spec_bytes) {
-  std::stable_sort(docs.begin(), docs.end(),
-                   [&](const auto& left, const auto& right) {
-                     return jungle::query::v1::sort_less(
-                         bson::BsonView(std::span<const std::uint8_t>{left.data(), left.size()}),
-                         bson::BsonView(std::span<const std::uint8_t>{right.data(), right.size()}),
-                         spec_bytes);
-                   });
-  return docs;
-}
-
-std::vector<std::vector<std::uint8_t>> apply_skip_stage(
-    std::vector<std::vector<std::uint8_t>> docs, std::size_t skip) {
-  if (skip >= docs.size()) return {};
-  docs.erase(docs.begin(), docs.begin() + static_cast<std::ptrdiff_t>(skip));
-  return docs;
-}
-
-std::vector<std::vector<std::uint8_t>> apply_limit_stage(
-    std::vector<std::vector<std::uint8_t>> docs, std::size_t limit) {
-  if (limit == 0 || docs.size() <= limit) return docs;
-  docs.resize(limit);
-  return docs;
-}
-
-std::vector<std::vector<std::uint8_t>> apply_project_stage(
-    const std::vector<std::vector<std::uint8_t>>& docs,
-    std::span<const std::uint8_t> spec_bytes) {
-  std::vector<std::vector<std::uint8_t>> out;
-  out.reserve(docs.size());
-  for (const auto& doc : docs) {
-    out.push_back(clone_doc_with_projection(doc, spec_bytes));
-  }
-  return out;
-}
-
-std::vector<std::vector<std::uint8_t>> apply_add_fields_stage(
-    const std::vector<std::vector<std::uint8_t>>& docs,
-    std::span<const std::uint8_t> spec_bytes) {
-  std::vector<std::vector<std::uint8_t>> out;
-  out.reserve(docs.size());
-  for (const auto& doc : docs) {
-    out.push_back(clone_doc_with_add_fields(doc, spec_bytes));
-  }
-  return out;
-}
-
-std::vector<std::vector<std::uint8_t>> apply_unset_stage(
-    const std::vector<std::vector<std::uint8_t>>& docs,
-    const std::unordered_set<std::string>& fields) {
-  std::vector<std::vector<std::uint8_t>> out;
-  out.reserve(docs.size());
-  for (const auto& doc : docs) {
-    out.push_back(clone_doc_with_unset_fields(doc, fields));
-  }
-  return out;
-}
-
-std::vector<std::vector<std::uint8_t>> apply_replace_root_stage(
-    const std::vector<std::vector<std::uint8_t>>& docs,
-    const std::vector<std::uint8_t>& expr_bytes) {
-  std::vector<std::vector<std::uint8_t>> out;
-  out.reserve(docs.size());
-  for (const auto& doc : docs) {
-    bson_t source;
-    bson_init_static(&source, doc.data(), doc.size());
-    auto evaluated = evaluate_expression(source, expr_bytes);
-    if (!evaluated) {
-      throw std::runtime_error("$replaceRoot expression resolved to missing");
-    }
-    auto replacement = unwrap_document_bytes(*evaluated);
-    if (!replacement) {
-      throw std::runtime_error("$replaceRoot requires a document result");
-    }
-    out.push_back(*replacement);
-  }
-  return out;
 }
 
 struct GroupAccumulatorSpec {
@@ -569,24 +348,6 @@ std::vector<std::vector<std::uint8_t>> apply_group_stage(
   return out;
 }
 
-std::vector<std::vector<std::uint8_t>> apply_count_stage(
-    const std::vector<std::vector<std::uint8_t>>& docs,
-    std::string_view field_name) {
-  if (field_name.empty() || field_name[0] == '$' || !top_level_only(field_name)) {
-    throw std::runtime_error("$count requires a top-level field name");
-  }
-  if (docs.empty()) return {};
-
-  bson_t out;
-  bson_init(&out);
-  bson_append_int64(&out, field_name.data(), static_cast<int>(field_name.size()),
-                    static_cast<std::int64_t>(docs.size()));
-  std::vector<std::vector<std::uint8_t>> result;
-  result.push_back(bytes_from_bson(out));
-  bson_destroy(&out);
-  return result;
-}
-
 std::vector<std::vector<std::uint8_t>> apply_sort_by_count_stage(
     const std::vector<std::vector<std::uint8_t>>& docs,
     const std::vector<std::uint8_t>& expr_bytes) {
@@ -800,6 +561,7 @@ std::vector<std::vector<std::uint8_t>> apply_unwind_stage(
   }
   return out;
 }
+
 }  // namespace
 
 std::vector<std::vector<std::uint8_t>> run_pipeline(
@@ -967,6 +729,5 @@ std::vector<std::vector<std::uint8_t>> run_pipeline(
   }
   return docs;
 }
-
 
 }  // namespace savannah::jungle::query::v1

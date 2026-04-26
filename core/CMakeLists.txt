@@ -10,7 +10,10 @@ add_library(savannah_core STATIC
   src/query/project.cpp
   src/query/planner.cpp
   src/query/expression.cpp
-  src/query/pipeline.cpp
+  src/query/pipeline/dispatch.cpp
+  src/query/pipeline/match.cpp
+  src/query/pipeline/shaping.cpp
+  src/query/pipeline/project.cpp
   src/index/manager.cpp
   src/cursor_registry.cpp
 )
