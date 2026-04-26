@@ -298,6 +298,28 @@ try {
   );
   if (stringOps) console.log('  string ops:', JSON.stringify(stringOps));
 
+  const typeOps = await safe('aggregate type ops', () =>
+    agg.aggregate([
+      { $sort: { score: 1 } },
+      { $limit: 1 },
+      {
+        $project: {
+          _id: 0,
+          scoreType: { $type: '$score' },
+          kindType: { $type: '$kind' },
+          missingType: { $type: '$nonexistent' },
+          parsedInt: { $toInt: '42' },
+          parsedDouble: { $toDouble: '3.14' },
+          boolFromInt: { $toBool: '$score' },
+          boolFromString: { $toBool: '' },
+          isScoreNum: { $isNumber: '$score' },
+          isKindNum: { $isNumber: '$kind' },
+        },
+      },
+    ]).toArray(),
+  );
+  if (typeOps) console.log('  type ops:', JSON.stringify(typeOps));
+
   const addFieldsAgg = await safe('aggregate $set+$unset+$count', () =>
     agg.aggregate([
       { $set: { renamedKind: '$kind', seen: true } },

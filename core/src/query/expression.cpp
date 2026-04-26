@@ -721,6 +721,98 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
     return wrap_int64(static_cast<std::int64_t>(s->size()));
   }
 
+  // Type conversion + introspection -----------------------------------------
+  //
+  // $toInt/$toLong/$toDouble parse strings (with strtoll/strtod), pass
+  // numerics through (with truncation for $toInt/$toLong on doubles),
+  // bool → 0/1. Missing/null returns null. Mongo's $convert with onError
+  // is not yet plumbed; failed conversions return null instead of
+  // throwing. $type returns Mongo's BSON type name string.
+
+  if (std::string_view(op) == "$toInt" || std::string_view(op) == "$toLong" ||
+      std::string_view(op) == "$toDouble" || std::string_view(op) == "$toBool") {
+    auto value = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!value || nullish_wrapped(*value)) return wrap_null();
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*value, &holder, &it)) return wrap_null();
+    const auto t = bson_iter_type(&it);
+    const std::string_view target = op;
+
+    if (target == "$toBool") {
+      switch (t) {
+        case BSON_TYPE_BOOL:   return wrap_bool(bson_iter_bool(&it));
+        case BSON_TYPE_INT32:  return wrap_bool(bson_iter_int32(&it) != 0);
+        case BSON_TYPE_INT64:  return wrap_bool(bson_iter_int64(&it) != 0);
+        case BSON_TYPE_DOUBLE: return wrap_bool(bson_iter_double(&it) != 0.0);
+        case BSON_TYPE_UTF8: {
+          std::uint32_t len = 0;
+          bson_iter_utf8(&it, &len);
+          return wrap_bool(len > 0);  // any non-empty string → true
+        }
+        default: return wrap_bool(true);  // any present non-null value
+      }
+    }
+
+    // Numeric targets share a common parse step.
+    double d = 0.0;
+    bool got = false;
+    switch (t) {
+      case BSON_TYPE_INT32:  d = bson_iter_int32(&it); got = true; break;
+      case BSON_TYPE_INT64:  d = static_cast<double>(bson_iter_int64(&it)); got = true; break;
+      case BSON_TYPE_DOUBLE: d = bson_iter_double(&it); got = true; break;
+      case BSON_TYPE_BOOL:   d = bson_iter_bool(&it) ? 1.0 : 0.0; got = true; break;
+      case BSON_TYPE_UTF8: {
+        std::uint32_t len = 0;
+        const char* text = bson_iter_utf8(&it, &len);
+        const std::string s(text, len);
+        try {
+          if (target == "$toDouble") d = std::stod(s);
+          else                       d = static_cast<double>(std::stoll(s));
+          got = true;
+        } catch (...) { return wrap_null(); }
+        break;
+      }
+      default: return wrap_null();
+    }
+    if (!got) return wrap_null();
+    if (target == "$toDouble") return wrap_double(d);
+    return wrap_int64(static_cast<std::int64_t>(d));  // $toInt and $toLong
+  }
+
+  if (std::string_view(op) == "$type") {
+    auto value = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!value) return wrap_utf8("missing");
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*value, &holder, &it)) return wrap_utf8("missing");
+    switch (bson_iter_type(&it)) {
+      case BSON_TYPE_DOUBLE:    return wrap_utf8("double");
+      case BSON_TYPE_UTF8:      return wrap_utf8("string");
+      case BSON_TYPE_DOCUMENT:  return wrap_utf8("object");
+      case BSON_TYPE_ARRAY:     return wrap_utf8("array");
+      case BSON_TYPE_BINARY:    return wrap_utf8("binData");
+      case BSON_TYPE_OID:       return wrap_utf8("objectId");
+      case BSON_TYPE_BOOL:      return wrap_utf8("bool");
+      case BSON_TYPE_DATE_TIME: return wrap_utf8("date");
+      case BSON_TYPE_NULL:      return wrap_utf8("null");
+      case BSON_TYPE_INT32:     return wrap_utf8("int");
+      case BSON_TYPE_TIMESTAMP: return wrap_utf8("timestamp");
+      case BSON_TYPE_INT64:     return wrap_utf8("long");
+      case BSON_TYPE_DECIMAL128: return wrap_utf8("decimal");
+      default:                  return wrap_utf8("missing");
+    }
+  }
+
+  if (std::string_view(op) == "$isNumber") {
+    auto value = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!value) return wrap_bool(false);
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*value, &holder, &it)) return wrap_bool(false);
+    return wrap_bool(is_numeric(bson_iter_type(&it)));
+  }
+
   if (std::string_view(op) == "$arrayElemAt") {
     const auto args = evaluate_array_elements(source_doc, op_it);
     if (args.size() < 2 || args[0].empty() || args[1].empty()) return std::nullopt;
