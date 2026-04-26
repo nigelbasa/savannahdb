@@ -222,6 +222,29 @@ try {
   );
   if (expressionDepth) console.log('  expression depth:', JSON.stringify(expressionDepth));
 
+  const arithmetic = await safe('aggregate arithmetic+comparison', () =>
+    agg.aggregate([
+      { $sort: { score: 1 } },
+      {
+        $project: {
+          _id: 0,
+          kind: 1,
+          score: 1,
+          doubled: { $multiply: ['$score', 2] },
+          plusOne: { $add: ['$score', 1] },
+          half: { $divide: ['$score', 2] },
+          remainder: { $mod: ['$score', 2] },
+          delta: { $subtract: ['$score', 3] },
+          absDelta: { $abs: { $subtract: ['$score', 3] } },
+          isCat: { $eq: ['$kind', 'cat'] },
+          highScore: { $gt: ['$score', 3] },
+          rounded: { $round: [{ $divide: ['$score', 3] }, 2] },
+        },
+      },
+    ]).toArray(),
+  );
+  if (arithmetic) console.log('  arithmetic:', JSON.stringify(arithmetic));
+
   const addFieldsAgg = await safe('aggregate $set+$unset+$count', () =>
     agg.aggregate([
       { $set: { renamedKind: '$kind', seen: true } },
