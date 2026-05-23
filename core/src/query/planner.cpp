@@ -144,6 +144,60 @@ std::optional<LookupPlan> plan_index_lookup(
     return std::nullopt;
   }
 
+  // Pass 1 — collect every top-level equality clause (literal value, not
+  // an operator subdoc). Used to try matching a compound index covering
+  // multiple equalities at once.
+  struct EqClause {
+    std::string path;
+    index::IndexedValue value;
+  };
+  std::vector<EqClause> equalities;
+  std::size_t total_clauses = 0;
+  {
+    bson_iter_t it;
+    if (!bson_iter_init(&it, &filter)) return std::nullopt;
+    while (bson_iter_next(&it)) {
+      const char* key = bson_iter_key(&it);
+      if (!key) continue;
+      if (key[0] == '$') continue;
+      ++total_clauses;
+      if (bson_iter_type(&it) == BSON_TYPE_ARRAY) continue;
+      if (is_operator_subdoc(it)) continue;
+      EqClause c{key, index::IndexedValue::from_iter(it)};
+      equalities.push_back(std::move(c));
+    }
+  }
+
+  // Compound match: if every top-level clause is an equality AND a
+  // compound index covers a non-trivial prefix, use it. Building a key
+  // that matches fewer fields than the index declares is still valid —
+  // the planner just falls back to single-field below if that prefix is
+  // 1 (since single-field is already covered there).
+  if (!equalities.empty() && equalities.size() == total_clauses) {
+    std::vector<std::string> eq_paths;
+    eq_paths.reserve(equalities.size());
+    for (const auto& e : equalities) eq_paths.push_back(e.path);
+    const auto matched_prefix = indexes.match_compound_index(eq_paths);
+    if (matched_prefix.size() >= 2) {
+      LookupPlan plan;
+      plan.compound_field_paths = matched_prefix;
+      plan.compound_exact_key.reserve(matched_prefix.size());
+      for (const auto& declared : matched_prefix) {
+        for (const auto& e : equalities) {
+          if (e.path == declared) {
+            plan.compound_exact_key.push_back(e.value);
+            break;
+          }
+        }
+      }
+      // Sanity: compound key must match the prefix length.
+      if (plan.compound_exact_key.size() == matched_prefix.size()) {
+        return plan;
+      }
+    }
+  }
+
+  // Single-field path — preserves the existing 1-clause invariant.
   bson_iter_t it;
   if (!bson_iter_init(&it, &filter)) return std::nullopt;
 
@@ -185,7 +239,9 @@ std::optional<SortPlan> plan_index_sort(
   bson_iter_t it;
   if (!bson_iter_init(&it, &sort) || !bson_iter_next(&it)) return std::nullopt;
   const char* key = bson_iter_key(&it);
-  if (!key || !indexes.has_path(key)) return std::nullopt;
+  if (!key || !indexes.has_path(key) || !indexes.supports_ordered_sort(key)) {
+    return std::nullopt;
+  }
 
   bool ascending = true;
   if (is_numeric(bson_iter_type(&it))) {
@@ -197,11 +253,19 @@ std::optional<SortPlan> plan_index_sort(
   return SortPlan{std::string(key), ascending};
 }
 
-std::vector<std::size_t> snapshot_from_lookup_plan(
+std::vector<::savannah::storage::RecordId> snapshot_from_lookup_plan(
     const index::IndexManager& indexes, const LookupPlan& plan) {
+  if (!plan.compound_field_paths.empty()) {
+    const auto* record_ids = indexes.lookup_exact_compound(
+        plan.compound_field_paths, plan.compound_exact_key);
+    return record_ids ? *record_ids
+                      : std::vector<::savannah::storage::RecordId>{};
+  }
   if (plan.exact_key) {
-    const auto* slot_ids = indexes.lookup_exact(plan.field_path, *plan.exact_key);
-    return slot_ids ? *slot_ids : std::vector<std::size_t>{};
+    const auto* record_ids =
+        indexes.lookup_exact(plan.field_path, *plan.exact_key);
+    return record_ids ? *record_ids
+                      : std::vector<::savannah::storage::RecordId>{};
   }
   return indexes.lookup_range(
       plan.field_path,

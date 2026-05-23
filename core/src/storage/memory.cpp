@@ -12,6 +12,7 @@
 #include <bson/bson.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <optional>
@@ -22,7 +23,48 @@
 #include <utility>
 #include <vector>
 
+namespace {
+
+// Read at process start, never re-checked. SavannahDB is intended for use
+// inside a single Node process; flipping the env var mid-run shouldn't
+// silently switch index behavior on later collection creations.
+bool implicit_id_index_enabled() {
+  static const bool enabled = [] {
+#ifdef _WIN32
+    char* value = nullptr;
+    std::size_t len = 0;
+    if (_dupenv_s(&value, &len, "SAVANNAH_DISABLE_ID_INDEX") != 0 || !value) {
+      return true;
+    }
+    const bool disabled = len > 0 && value[0] != '\0' && value[0] != '0';
+    std::free(value);
+    return !disabled;
+#else
+    const char* value = std::getenv("SAVANNAH_DISABLE_ID_INDEX");
+    if (!value) return true;
+    return !(value[0] != '\0' && value[0] != '0');
+#endif
+  }();
+  return enabled;
+}
+
+}  // namespace
+
 namespace savannah::storage {
+
+MemoryCollection::MemoryCollection(Arena& arena, IStorageBackend& owner,
+                                   std::string db_name)
+    : arena_(arena), owner_(owner), db_name_(std::move(db_name)) {
+  // Implicit _id index. Without this every {_id: x} lookup is O(N) over
+  // the slot vector; with it the planner picks the index and lookups are
+  // O(log N). Idempotent — Canopy's replay path also calls create_index
+  // for any persisted indexes, and this one collides cleanly with a
+  // no-op return. Opt-out via SAVANNAH_DISABLE_ID_INDEX=1 for workloads
+  // that never read by _id and want the ~30% insert-throughput back.
+  if (implicit_id_index_enabled()) {
+    indexes_.create("_id_", "_id");
+  }
+}
 
 std::span<std::uint8_t> Arena::allocate(std::size_t bytes) {
   if (chunks_.empty() || chunks_.back().used + bytes > chunks_.back().size) {
@@ -49,15 +91,30 @@ std::span<std::uint8_t> Arena::copy(std::span<const std::uint8_t> src) {
 jungle::storage::v1::InsertResult MemoryCollection::insert(
     std::span<const bson::BsonView> docs) {
   slots_.reserve(slots_.size() + docs.size());
+  jungle::storage::v1::InsertResult result{0};
   for (const auto& d : docs) {
     auto owned = arena_.copy(d.span());
     bson::BsonView view(
         std::span<const std::uint8_t>{owned.data(), owned.size()});
+    // Unique check first — at this point no record_id is consumed, so we
+    // can short-circuit without leaving holes in the id sequence. Mongo's
+    // ordered:true semantics: stop at the first error.
+    const std::string violator = indexes_.would_violate_unique(
+        kInvalidRecordId, view);
+    if (!violator.empty()) {
+      result.err_code = 11000;
+      result.err_name = "DuplicateKey";
+      result.err_message = "duplicate key in unique index " + violator;
+      return result;
+    }
+    const RecordId record_id = next_record_id_++;
     const std::size_t slot_idx = slots_.size();
-    slots_.push_back(DocSlot{view, false});
-    indexes_.on_insert(slot_idx, view);
+    slots_.push_back(DocSlot{record_id, view, false});
+    slot_by_id_[record_id] = slot_idx;
+    indexes_.on_insert(record_id, view);
+    result.inserted_count += 1;
   }
-  return {docs.size()};
+  return result;
 }
 
 namespace {
@@ -99,15 +156,23 @@ class MemoryIterator final : public jungle::storage::v1::Iterator {
 class IndexLookupIterator final : public jungle::storage::v1::Iterator {
  public:
   IndexLookupIterator(const std::vector<DocSlot>& slots,
-                      std::vector<std::size_t> slot_ids,
+                      const std::unordered_map<RecordId, std::size_t>& slot_by_id,
+                      std::vector<RecordId> record_ids,
                       std::span<const std::uint8_t> filter_bytes)
       : slots_(slots),
-        slot_ids_(std::move(slot_ids)),
+        slot_by_id_(slot_by_id),
+        record_ids_(std::move(record_ids)),
         filter_(filter_bytes.begin(), filter_bytes.end()) {}
 
   bool has_next() override {
-    while (index_ < slot_ids_.size()) {
-      const std::size_t slot_idx = slot_ids_[index_];
+    while (index_ < record_ids_.size()) {
+      const RecordId record_id = record_ids_[index_];
+      auto slot_it = slot_by_id_.find(record_id);
+      if (slot_it == slot_by_id_.end()) {
+        ++index_;
+        continue;
+      }
+      const std::size_t slot_idx = slot_it->second;
       if (slot_idx >= slots_.size()) {
         ++index_;
         continue;
@@ -124,11 +189,15 @@ class IndexLookupIterator final : public jungle::storage::v1::Iterator {
     return false;
   }
 
-  bson::BsonView next() override { return slots_[slot_ids_[index_++]].view; }
+  bson::BsonView next() override {
+    const RecordId record_id = record_ids_[index_++];
+    return slots_[slot_by_id_.at(record_id)].view;
+  }
 
  private:
   const std::vector<DocSlot>& slots_;
-  std::vector<std::size_t> slot_ids_;
+  const std::unordered_map<RecordId, std::size_t>& slot_by_id_;
+  std::vector<RecordId> record_ids_;
   std::vector<std::uint8_t> filter_;
   std::size_t index_{0};
 };
@@ -147,11 +216,13 @@ std::unique_ptr<jungle::storage::v1::Iterator> make_slice_iterator(
 
 std::unique_ptr<jungle::storage::v1::Iterator> make_filter_iterator(
     const std::vector<DocSlot>& slots, const index::IndexManager& indexes,
+    const std::unordered_map<RecordId, std::size_t>& slot_by_id,
     std::span<const std::uint8_t> filter_bytes) {
   auto plan = jungle::query::v1::plan_index_lookup(indexes, filter_bytes);
   if (!plan) return std::make_unique<MemoryIterator>(slots, filter_bytes);
   return std::make_unique<IndexLookupIterator>(
-      slots, jungle::query::v1::snapshot_from_lookup_plan(indexes, *plan),
+      slots, slot_by_id,
+      jungle::query::v1::snapshot_from_lookup_plan(indexes, *plan),
       filter_bytes);
 }
 
@@ -181,13 +252,13 @@ std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::find(
     std::span<const std::uint8_t> sort_bytes,
     std::size_t skip, std::size_t limit) {
   if (auto sort_plan = jungle::query::v1::plan_index_sort(indexes_, sort_bytes)) {
-    std::vector<std::size_t> snapshot;
+    std::vector<RecordId> snapshot;
     if (auto filter_plan = jungle::query::v1::plan_index_lookup(indexes_, filter_bytes);
         filter_plan && filter_plan->field_path == sort_plan->field_path) {
       if (filter_plan->exact_key) {
-        const auto* slot_ids = indexes_.lookup_exact(
+        const auto* record_ids = indexes_.lookup_exact(
             filter_plan->field_path, *filter_plan->exact_key);
-        if (slot_ids) snapshot = *slot_ids;
+        if (record_ids) snapshot = *record_ids;
       } else {
         snapshot = indexes_.lookup_range(
             filter_plan->field_path,
@@ -203,13 +274,13 @@ std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::find(
           !sort_plan->ascending);
     }
     auto iter = std::make_unique<IndexLookupIterator>(
-        slots_, std::move(snapshot), filter_bytes);
+        slots_, slot_by_id_, std::move(snapshot), filter_bytes);
     return make_slice_iterator(std::move(iter), skip, limit);
   }
 
   if (jungle::query::v1::has_sort_spec(sort_bytes)) {
     std::vector<bson::BsonView> all;
-    auto base = make_filter_iterator(slots_, indexes_, filter_bytes);
+    auto base = make_filter_iterator(slots_, indexes_, slot_by_id_, filter_bytes);
     while (base->has_next()) all.push_back(base->next());
 
     std::stable_sort(all.begin(), all.end(),
@@ -224,7 +295,7 @@ std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::find(
     return std::make_unique<VectorIterator>(std::move(all));
   }
 
-  auto iter = make_filter_iterator(slots_, indexes_, filter_bytes);
+  auto iter = make_filter_iterator(slots_, indexes_, slot_by_id_, filter_bytes);
   return make_slice_iterator(std::move(iter), skip, limit);
 }
 
@@ -239,8 +310,110 @@ std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::aggregate(
   return std::make_unique<OwnedBytesIterator>(std::move(docs));
 }
 
+jungle::storage::v1::IndexMutationResult MemoryCollection::create_index(
+    std::string_view name, std::span<const std::string> field_paths,
+    jungle::storage::v1::Collection::CreateIndexOptions options) {
+  if (field_paths.empty()) {
+    return {
+        .changed = false,
+        .err_code = 197,  // InvalidIndexSpecificationOption
+        .err_name = "InvalidIndexSpecification",
+        .err_message = "createIndex requires at least one field path",
+    };
+  }
+  std::vector<std::string> paths(field_paths.begin(), field_paths.end());
+  index::IndexOptions idx_opts;
+  idx_opts.unique = options.unique;
+  const bool created = indexes_.create(std::string(name), std::move(paths), idx_opts);
+  if (!created) return {.changed = false};
+
+  // For unique indexes on existing data, scan live slots first to detect any
+  // pre-existing duplicate. If found, roll back the index registration so the
+  // caller's listIndexes doesn't show a half-created index.
+  if (idx_opts.unique) {
+    std::unordered_map<std::string, storage::RecordId> seen;
+    for (const auto& slot : slots_) {
+      if (slot.deleted) continue;
+      const std::string violator =
+          indexes_.would_violate_unique(slot.record_id, slot.view);
+      if (violator == std::string(name)) {
+        indexes_.drop(name);
+        return {
+            .changed = false,
+            .err_code = 11000,  // DuplicateKey
+            .err_name = "DuplicateKey",
+            .err_message = "existing data violates uniqueness for index " +
+                           std::string(name),
+        };
+      }
+      // Insert into the index incrementally so subsequent docs see prior
+      // keys for the dup check. backfill_index would do this in one pass
+      // without checking; we need the per-doc check.
+      indexes_.on_insert(slot.record_id, slot.view);
+    }
+    return {.changed = true};
+  }
+
+  backfill_index(name);
+  return {.changed = true};
+}
+
+jungle::storage::v1::IndexMutationResult MemoryCollection::drop_index(
+    std::string_view name) {
+  if (name == "_id_" && implicit_id_index_enabled()) {
+    // Mongo also refuses to drop the _id index. Returning an error here
+    // (rather than silently no-op'ing) is what drivers expect so they can
+    // surface it correctly. Suppressed when the implicit index is disabled
+    // via env — in that case `_id_` isn't ours to protect.
+    return {
+        .changed = false,
+        .err_code = 72,  // InvalidIndexSpecificationOption — close enough
+        .err_name = "InvalidIndexSpecification",
+        .err_message = "cannot drop _id index",
+    };
+  }
+  return {.changed = indexes_.drop(name)};
+}
+
 bool MemoryCollection::backfill_index(std::string_view name) {
   return indexes_.backfill_one(name, slots_);
+}
+
+std::vector<MemoryCollection::SnapshotEntry> MemoryCollection::snapshot_entries() const {
+  std::vector<SnapshotEntry> out;
+  out.reserve(slots_.size());
+  for (const auto& slot : slots_) {
+    if (slot.deleted) continue;
+    out.push_back(SnapshotEntry{
+        slot.record_id,
+        std::vector<std::uint8_t>(slot.view.data(), slot.view.data() + slot.view.size()),
+    });
+  }
+  return out;
+}
+
+void MemoryCollection::restore_record(
+    RecordId record_id, std::span<const std::uint8_t> doc_bytes) {
+  auto owned = arena_.copy(doc_bytes);
+  bson::BsonView view(
+      std::span<const std::uint8_t>{owned.data(), owned.size()});
+  const std::size_t slot_idx = slots_.size();
+  slots_.push_back(DocSlot{record_id, view, false});
+  slot_by_id_[record_id] = slot_idx;
+  indexes_.on_insert(record_id, view);
+  if (record_id >= next_record_id_) next_record_id_ = record_id + 1;
+}
+
+void MemoryCollection::clear_for_reload() {
+  slots_.clear();
+  slot_by_id_.clear();
+  next_record_id_ = 1;
+  indexes_ = index::IndexManager{};
+  // Restore the implicit _id index after the IndexManager reset; otherwise
+  // the next batch of replayed inserts wouldn't populate it.
+  if (implicit_id_index_enabled()) {
+    indexes_.create("_id_", "_id");
+  }
 }
 
 jungle::storage::v1::UpdateBatchResult MemoryCollection::update(
@@ -264,6 +437,19 @@ jungle::storage::v1::UpdateBatchResult MemoryCollection::update(
     }
     res.matched += 1;
     if (outcome.changed) {
+      // Check uniqueness on the new doc shape BEFORE swapping it in. We
+      // skip this record's own id so updating without changing the indexed
+      // value doesn't false-positive against the doc's own pre-update key.
+      const bson::BsonView candidate(std::span<const std::uint8_t>{
+          outcome.bytes.data(), outcome.bytes.size()});
+      const std::string violator =
+          indexes_.would_violate_unique(slot.record_id, candidate);
+      if (!violator.empty()) {
+        res.err_code = 11000;
+        res.err_name = "DuplicateKey";
+        res.err_message = "duplicate key in unique index " + violator;
+        return res;
+      }
       // Update = erase old + insert new on the index side. Cheaper than
       // diffing per-index: the manager already handles missing values.
       const bson::BsonView old_view = slot.view;
@@ -271,8 +457,8 @@ jungle::storage::v1::UpdateBatchResult MemoryCollection::update(
           outcome.bytes.data(), outcome.bytes.size()});
       slot.view = bson::BsonView(
           std::span<const std::uint8_t>{owned.data(), owned.size()});
-      indexes_.on_erase(i, old_view);
-      indexes_.on_insert(i, slot.view);
+      indexes_.on_erase(slot.record_id, old_view);
+      indexes_.on_insert(slot.record_id, slot.view);
       res.modified += 1;
     }
     if (!multi) break;
@@ -290,9 +476,20 @@ jungle::storage::v1::UpdateBatchResult MemoryCollection::update(
         seeded.bytes.data(), seeded.bytes.size()});
     bson::BsonView new_view(
         std::span<const std::uint8_t>{owned.data(), owned.size()});
+    // Unique check: an upsert must not introduce a duplicate key.
+    const std::string violator =
+        indexes_.would_violate_unique(kInvalidRecordId, new_view);
+    if (!violator.empty()) {
+      res.err_code = 11000;
+      res.err_name = "DuplicateKey";
+      res.err_message = "duplicate key in unique index " + violator;
+      return res;
+    }
+    const RecordId record_id = next_record_id_++;
     const std::size_t new_slot_idx = slots_.size();
-    slots_.push_back(DocSlot{new_view, false});
-    indexes_.on_insert(new_slot_idx, new_view);
+    slots_.push_back(DocSlot{record_id, new_view, false});
+    slot_by_id_[record_id] = new_slot_idx;
+    indexes_.on_insert(record_id, new_view);
 
     // Extract the upserted _id so the wire layer can echo it back.
     bson_t b;
@@ -323,7 +520,7 @@ jungle::storage::v1::EraseResult MemoryCollection::erase(
     auto& slot = slots_[i];
     if (slot.deleted) continue;
     if (!jungle::query::v1::matches(slot.view, filter_bytes)) continue;
-    indexes_.on_erase(i, slot.view);
+    indexes_.on_erase(slot.record_id, slot.view);
     slot.deleted = true;  // tombstone — live cursors stay valid.
     res.deleted += 1;
     if (single) break;

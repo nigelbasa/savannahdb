@@ -124,7 +124,7 @@ std::vector<std::vector<std::uint8_t>> apply_group_stage(
   for (const auto& doc : docs) {
     bson_t source;
     bson_init_static(&source, doc.data(), doc.size());
-    auto evaluated_id = evaluate_expression(source, id_expr).value_or(std::vector<std::uint8_t>{});
+    auto evaluated_id = evaluate_expression(source, id_expr).value_or(wrap_null());
     bson_t id_holder;
     bson_iter_t id_value;
     if (!unwrap_iter(evaluated_id, &id_holder, &id_value)) continue;
@@ -176,21 +176,19 @@ std::vector<std::vector<std::uint8_t>> apply_group_stage(
         continue;
       }
       if (acc.kind == GroupAccumulatorSpec::Kind::First) {
-        if (!state.first_seen[i] && evaluated) {
+        if (!state.first_seen[i]) {
           state.first_seen[i] = true;
-          state.first_values[i] = *evaluated;
+          state.first_values[i] = evaluated.value_or(wrap_null());
         }
         continue;
       }
       if (acc.kind == GroupAccumulatorSpec::Kind::Last) {
-        if (evaluated) {
-          state.last_seen[i] = true;
-          state.last_values[i] = *evaluated;
-        }
+        state.last_seen[i] = true;
+        state.last_values[i] = evaluated.value_or(wrap_null());
         continue;
       }
-      if (acc.kind == GroupAccumulatorSpec::Kind::Push && evaluated) {
-        state.pushes[i].push_back(*evaluated);
+      if (acc.kind == GroupAccumulatorSpec::Kind::Push) {
+        if (evaluated) state.pushes[i].push_back(*evaluated);
         continue;
       }
       if ((acc.kind == GroupAccumulatorSpec::Kind::Min ||
@@ -240,12 +238,12 @@ std::vector<std::vector<std::uint8_t>> apply_group_stage(
           bson_append_null(&group_doc, acc.name.c_str(), -1);
         }
       } else if (acc.kind == GroupAccumulatorSpec::Kind::Push) {
-        bson_t arr;
-        bson_append_array_begin(&group_doc, acc.name.c_str(), -1, &arr);
+        bson_array_builder_t* arr = nullptr;
+        bson_append_array_builder_begin(&group_doc, acc.name.c_str(), -1, &arr);
         for (std::size_t item = 0; item < state.pushes[i].size(); ++item) {
-          append_wrapped_array_item(&arr, item, state.pushes[i][item]);
+          append_wrapped_array_item(arr, state.pushes[i][item]);
         }
-        bson_append_array_end(&group_doc, &arr);
+        bson_append_array_builder_end(&group_doc, arr);
       } else if (acc.kind == GroupAccumulatorSpec::Kind::Min ||
                  acc.kind == GroupAccumulatorSpec::Kind::Max) {
         if (state.value_seen[i]) {
@@ -274,12 +272,11 @@ std::vector<std::vector<std::uint8_t>> apply_sort_by_count_stage(
   for (const auto& doc : docs) {
     bson_t source;
     bson_init_static(&source, doc.data(), doc.size());
-    auto evaluated = evaluate_expression(source, expr_bytes);
-    if (!evaluated) continue;
-    std::string key(evaluated->begin(), evaluated->end());
+    auto evaluated = evaluate_expression(source, expr_bytes).value_or(wrap_null());
+    std::string key(evaluated.begin(), evaluated.end());
     auto [it, inserted] = groups.try_emplace(key);
     if (inserted) {
-      it->second.value = *evaluated;
+      it->second.value = evaluated;
       order.push_back(key);
     }
     it->second.count += 1;

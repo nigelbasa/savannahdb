@@ -1,0 +1,109 @@
+name: Prebuild native addon
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: linux,   arch: x64,    runner: ubuntu-22.04 }
+          - { os: darwin,  arch: x64,    runner: macos-13 }
+          - { os: darwin,  arch: arm64,  runner: macos-14 }
+          - { os: win32,   arch: x64,    runner: windows-2022 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # vcpkg toolchain — bootstrap via the action so libbson resolves in
+      # manifest mode (see vcpkg.json). Same baseline across all runners.
+      - name: Install vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: aa40adda5352e87655b8583cfb2451d5e9e276fd
+
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+
+      - name: Install Node deps
+        run: npm install --ignore-scripts
+
+      # Each OS picks its own vcpkg triplet. The Linux/macOS triplets do not
+      # have the "-md" (MSVCRT) suffix that Windows requires.
+      - name: Build native (Windows)
+        if: matrix.os == 'win32'
+        run: npx cmake-js compile --CDCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake --CDVCPKG_TARGET_TRIPLET=x64-windows-static-md
+        shell: pwsh
+
+      - name: Build native (Linux)
+        if: matrix.os == 'linux'
+        run: npx cmake-js compile --CDCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake --CDVCPKG_TARGET_TRIPLET=x64-linux
+
+      - name: Build native (macOS x64)
+        if: matrix.os == 'darwin' && matrix.arch == 'x64'
+        run: npx cmake-js compile --CDCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake --CDVCPKG_TARGET_TRIPLET=x64-osx
+
+      - name: Build native (macOS arm64)
+        if: matrix.os == 'darwin' && matrix.arch == 'arm64'
+        run: npx cmake-js compile --CDCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake --CDVCPKG_TARGET_TRIPLET=arm64-osx
+
+      - name: Stage prebuild
+        run: node scripts/prebuild.mjs
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prebuild-${{ matrix.os }}-${{ matrix.arch }}
+          path: server/prebuilds/${{ matrix.os }}-${{ matrix.arch }}/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install deps
+        run: npm install --ignore-scripts
+
+      - name: Build TS
+        run: npm run build --workspace @nigelbasa/savannahdb
+
+      - name: Download all prebuilds
+        uses: actions/download-artifact@v4
+        with:
+          path: prebuilds-raw
+          pattern: prebuild-*
+
+      - name: Assemble prebuilds/ into package
+        run: |
+          mkdir -p server/prebuilds
+          for d in prebuilds-raw/prebuild-*; do
+            name="${d#prebuilds-raw/prebuild-}"
+            mkdir -p "server/prebuilds/$name"
+            cp -r "$d"/* "server/prebuilds/$name/"
+          done
+          ls -R server/prebuilds
+
+      - name: Publish to npm
+        run: npm publish --workspace @nigelbasa/savannahdb --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

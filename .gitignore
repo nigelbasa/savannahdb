@@ -4,7 +4,14 @@ build/
 *.node
 *.log
 .DS_Store
+# Local prebuilds populated by scripts/prebuild.mjs. The CI matrix produces
+# the authoritative copies that get bundled into the published tarball.
+server/prebuilds/
 
+.claude/
+AGENTS.md
+CLAUDE.md
+LOG.md
 # Transient run output captured during local testing.
 server_run.*
 *.out

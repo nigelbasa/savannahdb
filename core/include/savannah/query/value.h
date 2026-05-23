@@ -26,6 +26,11 @@ bool value_equal(bson_iter_t a, bson_iter_t b);
 // sort: defer to next key, index: not applicable since indexes are typed).
 std::optional<int> value_compare(bson_iter_t a, bson_iter_t b);
 
+// MongoDB's BSON-type precedence for sort operations. Missing fields are
+// handled at the caller site as equivalent to `null`; this helper ranks
+// only concrete BSON values.
+int sort_type_rank(bson_type_t t);
+
 // Resolve a top-level or dotted field path against `doc`. *out is valid
 // only on true. Single-segment keys go through bson_iter_find; dotted keys
 // use libbson's descendant walker (handles array indices like "tags.0").

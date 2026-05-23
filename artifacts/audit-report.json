@@ -1,0 +1,280 @@
+{
+  "generatedAt": "2026-05-23T21:25:44.044Z",
+  "node": "v25.8.1",
+  "platform": "win32-x64",
+  "mongo": {
+    "version": "8.2.7"
+  },
+  "accuracy": [
+    {
+      "id": "filter.eq",
+      "category": "filter",
+      "operator": "$eq",
+      "verdict": "match",
+      "savannahMs": 1.52,
+      "mongoMs": 2.92,
+      "diff": null
+    },
+    {
+      "id": "filter.ne",
+      "category": "filter",
+      "operator": "$ne",
+      "verdict": "match",
+      "savannahMs": 0.13,
+      "mongoMs": 0.93,
+      "diff": null
+    },
+    {
+      "id": "filter.gt-gte-lt-lte",
+      "category": "filter",
+      "operator": "$gt $gte $lt $lte",
+      "verdict": "match",
+      "savannahMs": 0.51,
+      "mongoMs": 6.34,
+      "diff": null
+    },
+    {
+      "id": "filter.in-nin",
+      "category": "filter",
+      "operator": "$in $nin",
+      "verdict": "match",
+      "savannahMs": 0.4,
+      "mongoMs": 1.59,
+      "diff": null
+    },
+    {
+      "id": "filter.exists",
+      "category": "filter",
+      "operator": "$exists",
+      "verdict": "match",
+      "savannahMs": 0.31,
+      "mongoMs": 1.83,
+      "diff": null
+    },
+    {
+      "id": "filter.regex",
+      "category": "filter",
+      "operator": "$regex",
+      "verdict": "match",
+      "savannahMs": 0.3,
+      "mongoMs": 0.83,
+      "diff": null
+    },
+    {
+      "id": "filter.and-or",
+      "category": "filter",
+      "operator": "$and $or",
+      "verdict": "match",
+      "savannahMs": 0.21,
+      "mongoMs": 0.82,
+      "diff": null
+    },
+    {
+      "id": "filter.nested-path",
+      "category": "filter",
+      "operator": "dot-path",
+      "verdict": "match",
+      "savannahMs": 0.12,
+      "mongoMs": 0.76,
+      "diff": null
+    },
+    {
+      "id": "expr.arithmetic",
+      "category": "expression",
+      "operator": "$add $subtract $multiply $divide $mod",
+      "verdict": "match",
+      "savannahMs": 0.48,
+      "mongoMs": 1.61,
+      "diff": null
+    },
+    {
+      "id": "expr.string",
+      "category": "expression",
+      "operator": "$toLower $toUpper $concat $strLenCP",
+      "verdict": "match",
+      "savannahMs": 0.23,
+      "mongoMs": 1.99,
+      "diff": null
+    },
+    {
+      "id": "expr.cond",
+      "category": "expression",
+      "operator": "$cond $switch $ifNull",
+      "verdict": "match",
+      "savannahMs": 0.24,
+      "mongoMs": 1.44,
+      "diff": null
+    },
+    {
+      "id": "expr.array",
+      "category": "expression",
+      "operator": "$size $arrayElemAt $concatArrays $reverseArray $slice $in",
+      "verdict": "match",
+      "savannahMs": 0.38,
+      "mongoMs": 0.91,
+      "diff": null
+    },
+    {
+      "id": "pipeline.match-sort-limit",
+      "category": "pipeline",
+      "operator": "$match $sort $limit",
+      "verdict": "match",
+      "savannahMs": 0.19,
+      "mongoMs": 1.05,
+      "diff": null
+    },
+    {
+      "id": "pipeline.group",
+      "category": "pipeline",
+      "operator": "$group ($sum $avg $min $max $push $first $last)",
+      "verdict": "match",
+      "savannahMs": 0.45,
+      "mongoMs": 2.13,
+      "diff": null
+    },
+    {
+      "id": "pipeline.lookup-unwind",
+      "category": "pipeline",
+      "operator": "$lookup $unwind",
+      "verdict": "match",
+      "savannahMs": 0.8,
+      "mongoMs": 1.44,
+      "diff": null
+    },
+    {
+      "id": "pipeline.count",
+      "category": "pipeline",
+      "operator": "$count",
+      "verdict": "match",
+      "savannahMs": 0.18,
+      "mongoMs": 1.43,
+      "diff": null
+    },
+    {
+      "id": "pipeline.replace-root",
+      "category": "pipeline",
+      "operator": "$replaceRoot",
+      "verdict": "match",
+      "savannahMs": 0.17,
+      "mongoMs": 0.85,
+      "diff": null
+    },
+    {
+      "id": "update.set-inc-unset",
+      "category": "update",
+      "operator": "$set $inc $unset",
+      "verdict": "match",
+      "savannahMs": 0.4,
+      "mongoMs": 2.54,
+      "diff": null
+    },
+    {
+      "id": "update.upsert",
+      "category": "update",
+      "operator": "upsert",
+      "verdict": "match",
+      "savannahMs": 0.23,
+      "mongoMs": 1.55,
+      "diff": null
+    },
+    {
+      "id": "update.delete",
+      "category": "update",
+      "operator": "delete",
+      "verdict": "match",
+      "savannahMs": 0.27,
+      "mongoMs": 1.64,
+      "diff": null
+    }
+  ],
+  "perf": [
+    {
+      "label": "insertOne (cold)",
+      "iterations": 5000,
+      "totalMs": 63.1,
+      "opsPerSec": 79288
+    },
+    {
+      "label": "findOne(_id) — pk",
+      "iterations": 5000,
+      "totalMs": 74.5,
+      "opsPerSec": 67082
+    },
+    {
+      "label": "findOne(val) — idx",
+      "iterations": 5000,
+      "totalMs": 70.6,
+      "opsPerSec": 70866
+    },
+    {
+      "label": "find range (val gt)",
+      "iterations": 1000,
+      "totalMs": 112.3,
+      "opsPerSec": 8904
+    },
+    {
+      "label": "aggregate $group sum",
+      "iterations": 200,
+      "totalMs": 690.7,
+      "opsPerSec": 290
+    },
+    {
+      "label": "updateOne $inc",
+      "iterations": 2000,
+      "totalMs": 133.5,
+      "opsPerSec": 14977
+    }
+  ],
+  "persistence": [
+    {
+      "step": "insert-then-exit",
+      "ok": true,
+      "detail": "inserted"
+    },
+    {
+      "step": "reopen-read",
+      "ok": true,
+      "detail": {
+        "total": 3,
+        "ids": [
+          1,
+          2,
+          3
+        ],
+        "indexedHit": true,
+        "indexes": [
+          {
+            "name": "_id_",
+            "fieldPath": "_id"
+          },
+          {
+            "name": "n_idx",
+            "fieldPath": "n"
+          }
+        ]
+      }
+    },
+    {
+      "step": "delete-survives-restart",
+      "ok": true,
+      "detail": {
+        "total": 2,
+        "ids": [
+          1,
+          3
+        ],
+        "indexedHit": false,
+        "indexes": [
+          {
+            "name": "_id_",
+            "fieldPath": "_id"
+          },
+          {
+            "name": "n_idx",
+            "fieldPath": "n"
+          }
+        ]
+      }
+    }
+  ]
+}

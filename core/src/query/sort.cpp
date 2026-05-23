@@ -1,5 +1,6 @@
 #include "savannah/query/sort.h"
 
+#include "savannah/query/key_order.h"
 #include "savannah/query/value.h"
 
 #include <bson/bson.h>
@@ -19,7 +20,10 @@ bool resolve_view(bson::BsonView doc, const char* path, bson_iter_t* out) {
   return resolve_path(d, path, out);
 }
 
-// Per-key compare with missing-field semantics: in ascending, missing < present.
+// Per-key compare with MongoDB's missing/null and mixed-type sort semantics.
+// Missing fields sort as `null`, so missing vs explicit null are equal and
+// stable_sort preserves their original order. Present cross-type pairs use the
+// BSON type precedence table from query/value.cpp.
 int compare_for_key(bson::BsonView a, bson::BsonView b, const char* path,
                     bool ascending) {
   bson_iter_t ai;
@@ -27,13 +31,8 @@ int compare_for_key(bson::BsonView a, bson::BsonView b, const char* path,
   const bool pa = resolve_view(a, path, &ai);
   const bool pb = resolve_view(b, path, &bi);
 
-  if (!pa && !pb) return 0;
-  if (!pa) return ascending ? -1 : 1;  // missing first asc, last desc
-  if (!pb) return ascending ? 1 : -1;
-
-  auto cmp = value_compare(ai, bi);  // shared with filter — single semantics
-  if (!cmp) return 0;  // cross-type → defer to next key
-  return ascending ? *cmp : -*cmp;
+  return compare_optional_values_for_sort(
+      pa ? &ai : nullptr, pb ? &bi : nullptr, ascending);
 }
 
 }  // namespace

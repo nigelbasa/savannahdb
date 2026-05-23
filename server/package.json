@@ -1,21 +1,71 @@
 {
-  "name": "@savannahdb/server",
+  "name": "@nigelbasa/savannahdb",
   "version": "0.1.0",
-  "private": true,
+  "description": "Independent custom document database with embedded (N-API) and REST APIs. MongoDB-compatible MQL surface, no MongoDB runtime needed.",
   "type": "module",
   "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    }
+  },
+  "bin": {
+    "savannahdb-rest": "bin/savannahdb-rest.mjs"
+  },
+  "files": [
+    "dist/",
+    "bin/",
+    "prebuilds/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch bin/savannahdb-rest.mjs",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node bin/savannahdb-rest.mjs",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "bson": "^6.10.0"
+    "bson": "^6.10.0",
+    "node-gyp-build": "^4.8.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "mongodb": "^7.2.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "database",
+    "document-database",
+    "embedded-database",
+    "mongodb-compatible",
+    "mql",
+    "nosql",
+    "bson",
+    "n-api",
+    "native"
+  ],
+  "author": "Nigel Basarokwe <nigelbasarokwe@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nigelbasa/savannahdb.git"
+  },
+  "homepage": "https://github.com/nigelbasa/savannahdb#readme",
+  "bugs": {
+    "url": "https://github.com/nigelbasa/savannahdb/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

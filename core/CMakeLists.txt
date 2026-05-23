@@ -2,11 +2,14 @@ find_package(bson CONFIG REQUIRED)
 
 add_library(savannah_core STATIC
   src/engine.cpp
+  src/storage/canopy.cpp
+  src/storage/canopy_backend.cpp
   src/storage/memory.cpp
   src/query/value.cpp
   src/query/filter.cpp
   src/query/update.cpp
   src/query/sort.cpp
+  src/query/key_order.cpp
   src/query/project.cpp
   src/query/planner.cpp
   src/query/expression.cpp

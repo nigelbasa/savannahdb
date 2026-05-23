@@ -1,17 +1,23 @@
 {
-  "name": "savannahdb",
+  "name": "savannahdb-workspace",
   "version": "0.1.0",
   "private": true,
-  "description": "MongoDB wire-compatible document database",
+  "description": "Workspace root for SavannahDB. The published package is @nigelbasa/savannahdb (under server/).",
   "workspaces": [
     "server"
   ],
   "scripts": {
     "build:native": "scripts\\build-native.cmd",
-    "build:ts": "npm run build --workspace server",
+    "build:ts": "npm run build --workspace @nigelbasa/savannahdb",
     "build": "npm run build:native && npm run build:ts",
-    "dev": "npm run dev --workspace server",
-    "start": "npm start --workspace server"
+    "prebuild": "node scripts/prebuild.mjs",
+    "compare:driver": "node scripts/compare-driver.mjs",
+    "generate:mongodb-target": "node scripts/generate-mongodb-target.mjs",
+    "smoke:canopy-restart": "node scripts/smoke-canopy-restart.mjs",
+    "smoke:driver": "node scripts/smoke-driver.mjs",
+    "smoke:engine": "node scripts/smoke-engine.mjs",
+    "dev": "npm run dev --workspace @nigelbasa/savannahdb",
+    "start": "npm start --workspace @nigelbasa/savannahdb"
   },
   "dependencies": {
     "node-addon-api": "^8.3.0"

@@ -54,6 +54,9 @@ bool append_wrapped_value(bson_t* out, std::string_view key,
                           const std::vector<std::uint8_t>& wrapped);
 bool append_wrapped_array_item(bson_t* out, std::size_t index,
                                const std::vector<std::uint8_t>& wrapped);
+// Builder overload — index is implicit (libbson auto-numbers).
+bool append_wrapped_array_item(bson_array_builder_t* out,
+                               const std::vector<std::uint8_t>& wrapped);
 
 // `holder` is an output bson_t the caller owns (for libbson's static-init
 // lifetime); `out` is the iter to use afterwards. Returns true on success.

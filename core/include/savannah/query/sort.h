@@ -5,9 +5,8 @@
 //   - Dotted field paths (shared with filter eval)
 //   - Stable: ties preserve insertion order via std::stable_sort
 //
-// Cross-type compares return "equal" so the next sort key (or insertion
-// order, on the last key) breaks the tie. MongoDB's full type-bracketing
-// order is Phase 0.4+ territory.
+// Cross-type compares follow MongoDB's BSON type order, while missing
+// fields sort as equivalent to explicit `null`.
 
 #include "savannah/bson/document.h"
 
@@ -17,8 +16,8 @@
 namespace savannah::jungle::query::v1 {
 
 // Returns true if `a` should sort before `b` under the given spec.
-// Missing values sort *before* present ones in ascending order (Mongo's
-// "null comes first" rule), inverted for descending keys.
+// Missing values sort as `null`: before numbers/strings/etc. in ascending
+// order, after them in descending order, and equal to explicit `null`.
 bool sort_less(bson::BsonView a, bson::BsonView b,
                std::span<const std::uint8_t> sort_spec);
 

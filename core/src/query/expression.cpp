@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace savannah::jungle::query::v1 {
 
@@ -149,6 +150,14 @@ bool append_wrapped_array_item(bson_t* out, std::size_t index,
   return bson_append_iter(out, key.c_str(), -1, &iter);
 }
 
+bool append_wrapped_array_item(bson_array_builder_t* out,
+                               const std::vector<std::uint8_t>& wrapped) {
+  bson_t holder;
+  bson_iter_t iter;
+  if (!unwrap_iter(wrapped, &holder, &iter)) return false;
+  return bson_array_builder_append_iter(out, &iter);
+}
+
 std::optional<std::vector<std::uint8_t>> unwrap_document_bytes(
     const std::vector<std::uint8_t>& wrapped) {
   bson_t holder;
@@ -228,6 +237,22 @@ std::vector<std::vector<std::uint8_t>> evaluate_array_elements(
     else values.push_back({});
   }
   return values;
+}
+
+// Resolve a unary array operator's argument. Mongo accepts both forms:
+//   {$reverseArray: "$xs"}       — bare expression
+//   {$reverseArray: ["$xs"]}     — single-element array shorthand
+// `evaluate_array_elements` only unwraps the array form, so for unary ops
+// we fall through to evaluating the expression directly when the operand
+// isn't an array.
+std::optional<std::vector<std::uint8_t>> evaluate_unary_array_arg(
+    const bson_t& source_doc, bson_iter_t op_it) {
+  if (bson_iter_type(&op_it) == BSON_TYPE_ARRAY) {
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() != 1 || args[0].empty()) return std::nullopt;
+    return args[0];
+  }
+  return evaluate_expression(source_doc, wrap_iter_value(op_it));
 }
 
 std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
@@ -695,21 +720,19 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
 
     bson_t built;
     bson_init(&built);
-    bson_t arr;
-    bson_append_array_begin(&built, "v", -1, &arr);
+    bson_array_builder_t* arr = nullptr;
+    bson_append_array_builder_begin(&built, "v", -1, &arr);
     std::size_t pos = 0;
-    std::size_t idx = 0;
     while (true) {
       const auto next = input.find(sep, pos);
       const auto piece = input.substr(pos,
           next == std::string_view::npos ? std::string_view::npos : next - pos);
-      const std::string key = std::to_string(idx++);
-      bson_append_utf8(&arr, key.c_str(), -1, piece.data(),
-                       static_cast<int>(piece.size()));
+      bson_array_builder_append_utf8(arr, piece.data(),
+                                     static_cast<int>(piece.size()));
       if (next == std::string_view::npos) break;
       pos = next + sep.size();
     }
-    bson_append_array_end(&built, &arr);
+    bson_append_array_builder_end(&built, arr);
     auto out = bytes_from_bson(built);
     bson_destroy(&built);
     return out;
@@ -931,19 +954,18 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
     const auto args = evaluate_array_elements(source_doc, op_it);
     bson_t built;
     bson_init(&built);
-    bson_t arr;
-    bson_append_array_begin(&built, "v", -1, &arr);
-    std::size_t out_idx = 0;
+    bson_array_builder_t* arr = nullptr;
+    bson_append_array_builder_begin(&built, "v", -1, &arr);
     for (const auto& w : args) {
       if (w.empty() || nullish_wrapped(w)) {
-        bson_append_array_end(&built, &arr);
+        bson_append_array_builder_end(&built, arr);
         bson_destroy(&built);
         return wrap_null();
       }
       bson_t holder;
       bson_iter_t it;
       if (!unwrap_iter(w, &holder, &it) || bson_iter_type(&it) != BSON_TYPE_ARRAY) {
-        bson_append_array_end(&built, &arr);
+        bson_append_array_builder_end(&built, arr);
         bson_destroy(&built);
         return wrap_null();
       }
@@ -955,11 +977,10 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
       bson_iter_t iit;
       if (!bson_iter_init(&iit, &inner)) continue;
       while (bson_iter_next(&iit)) {
-        const std::string key = std::to_string(out_idx++);
-        bson_append_iter(&arr, key.c_str(), -1, &iit);
+        bson_array_builder_append_iter(arr, &iit);
       }
     }
-    bson_append_array_end(&built, &arr);
+    bson_append_array_builder_end(&built, arr);
     auto out = bytes_from_bson(built);
     bson_destroy(&built);
     return out;
@@ -1009,13 +1030,13 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
 
     bson_t built;
     bson_init(&built);
-    bson_t out_arr;
-    bson_append_array_begin(&built, "v", -1, &out_arr);
+    bson_array_builder_t* out_arr = nullptr;
+    bson_append_array_builder_begin(&built, "v", -1, &out_arr);
     for (std::int64_t i = 0; i < count; ++i) {
-      append_wrapped_array_item(&out_arr, static_cast<std::size_t>(i),
+      append_wrapped_array_item(out_arr,
                                 elems[static_cast<std::size_t>(start + i)]);
     }
-    bson_append_array_end(&built, &out_arr);
+    bson_append_array_builder_end(&built, out_arr);
     auto bytes = bytes_from_bson(built);
     bson_destroy(&built);
     return bytes;
@@ -1039,21 +1060,18 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
 
     bson_t built;
     bson_init(&built);
-    bson_t arr;
-    bson_append_array_begin(&built, "v", -1, &arr);
-    std::size_t idx = 0;
+    bson_array_builder_t* arr = nullptr;
+    bson_append_array_builder_begin(&built, "v", -1, &arr);
     if (step > 0) {
       for (std::int64_t v = start; v < end; v += step) {
-        const std::string key = std::to_string(idx++);
-        bson_append_int64(&arr, key.c_str(), -1, v);
+        bson_array_builder_append_int64(arr, v);
       }
     } else {
       for (std::int64_t v = start; v > end; v += step) {
-        const std::string key = std::to_string(idx++);
-        bson_append_int64(&arr, key.c_str(), -1, v);
+        bson_array_builder_append_int64(arr, v);
       }
     }
-    bson_append_array_end(&built, &arr);
+    bson_append_array_builder_end(&built, arr);
     auto bytes = bytes_from_bson(built);
     bson_destroy(&built);
     return bytes;
@@ -1089,20 +1107,20 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
   }
 
   if (std::string_view(op) == "$isArray") {
-    auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
-    if (!v) return wrap_bool(false);
+    auto arg = evaluate_unary_array_arg(source_doc, op_it);
+    if (!arg || arg->empty()) return wrap_bool(false);
     bson_t holder;
     bson_iter_t it;
-    if (!unwrap_iter(*v, &holder, &it)) return wrap_bool(false);
+    if (!unwrap_iter(*arg, &holder, &it)) return wrap_bool(false);
     return wrap_bool(bson_iter_type(&it) == BSON_TYPE_ARRAY);
   }
 
   if (std::string_view(op) == "$first" || std::string_view(op) == "$last") {
-    auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
-    if (!v || nullish_wrapped(*v)) return wrap_null();
+    auto arg = evaluate_unary_array_arg(source_doc, op_it);
+    if (!arg || arg->empty() || nullish_wrapped(*arg)) return wrap_null();
     bson_t holder;
     bson_iter_t it;
-    if (!unwrap_iter(*v, &holder, &it)) return wrap_null();
+    if (!unwrap_iter(*arg, &holder, &it)) return wrap_null();
     if (bson_iter_type(&it) != BSON_TYPE_ARRAY) return wrap_null();
     std::uint32_t alen = 0;
     const std::uint8_t* adata = nullptr;
@@ -1119,11 +1137,11 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
   }
 
   if (std::string_view(op) == "$reverseArray") {
-    auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
-    if (!v || nullish_wrapped(*v)) return wrap_null();
+    auto arg = evaluate_unary_array_arg(source_doc, op_it);
+    if (!arg || arg->empty() || nullish_wrapped(*arg)) return wrap_null();
     bson_t holder;
     bson_iter_t it;
-    if (!unwrap_iter(*v, &holder, &it)) return wrap_null();
+    if (!unwrap_iter(*arg, &holder, &it)) return wrap_null();
     if (bson_iter_type(&it) != BSON_TYPE_ARRAY) return wrap_null();
     std::uint32_t alen = 0;
     const std::uint8_t* adata = nullptr;
@@ -1137,15 +1155,220 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
     }
     bson_t built;
     bson_init(&built);
-    bson_t out_arr;
-    bson_append_array_begin(&built, "v", -1, &out_arr);
+    bson_array_builder_t* out_arr = nullptr;
+    bson_append_array_builder_begin(&built, "v", -1, &out_arr);
     for (std::size_t i = 0; i < items.size(); ++i) {
-      append_wrapped_array_item(&out_arr, i, items[items.size() - 1 - i]);
+      append_wrapped_array_item(out_arr, items[items.size() - 1 - i]);
     }
-    bson_append_array_end(&built, &out_arr);
+    bson_append_array_builder_end(&built, out_arr);
     auto bytes = bytes_from_bson(built);
     bson_destroy(&built);
     return bytes;
+  }
+
+  // Object helpers -----------------------------------------------------------
+
+  if (std::string_view(op) == "$mergeObjects") {
+    // Args: array of documents. Later docs override earlier on key collision.
+    // null/missing operands are skipped (not null-propagating), matching
+    // Mongo's "ignore null operands" semantics.
+    if (bson_iter_type(&op_it) != BSON_TYPE_ARRAY) return wrap_null();
+    const auto args = evaluate_array_elements(source_doc, op_it);
+
+    // Insertion-ordered merge: walk each input doc in order, last write wins.
+    std::vector<std::string> order;
+    std::unordered_map<std::string, std::vector<std::uint8_t>> values;
+    for (const auto& w : args) {
+      if (w.empty() || nullish_wrapped(w)) continue;
+      bson_t holder;
+      bson_iter_t it;
+      if (!unwrap_iter(w, &holder, &it) || bson_iter_type(&it) != BSON_TYPE_DOCUMENT) continue;
+      std::uint32_t dlen = 0;
+      const std::uint8_t* ddata = nullptr;
+      bson_iter_document(&it, &dlen, &ddata);
+      bson_t doc;
+      if (!bson_init_static(&doc, ddata, dlen)) continue;
+      bson_iter_t dit;
+      if (!bson_iter_init(&dit, &doc)) continue;
+      while (bson_iter_next(&dit)) {
+        const char* key = bson_iter_key(&dit);
+        if (!key) continue;
+        const std::string skey(key);
+        if (!values.contains(skey)) order.push_back(skey);
+        values[skey] = wrap_iter_value(dit);
+      }
+    }
+
+    bson_t built;
+    bson_init(&built);
+    bson_t inner;
+    bson_append_document_begin(&built, "v", -1, &inner);
+    for (const auto& key : order) {
+      append_wrapped_value(&inner, key, values[key]);
+    }
+    bson_append_document_end(&built, &inner);
+    auto out = bytes_from_bson(built);
+    bson_destroy(&built);
+    return out;
+  }
+
+  if (std::string_view(op) == "$objectToArray") {
+    // {$objectToArray: <doc>} → [{k, v}, ...]
+    auto v = evaluate_expression(source_doc, wrap_iter_value(op_it));
+    if (!v || nullish_wrapped(*v)) return wrap_null();
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(*v, &holder, &it) || bson_iter_type(&it) != BSON_TYPE_DOCUMENT) {
+      return wrap_null();
+    }
+    std::uint32_t dlen = 0;
+    const std::uint8_t* ddata = nullptr;
+    bson_iter_document(&it, &dlen, &ddata);
+    bson_t doc;
+    if (!bson_init_static(&doc, ddata, dlen)) return wrap_null();
+
+    bson_t built;
+    bson_init(&built);
+    bson_array_builder_t* arr = nullptr;
+    bson_append_array_builder_begin(&built, "v", -1, &arr);
+    bson_iter_t dit;
+    if (bson_iter_init(&dit, &doc)) {
+      while (bson_iter_next(&dit)) {
+        const char* key = bson_iter_key(&dit);
+        if (!key) continue;
+        bson_t entry;
+        bson_array_builder_append_document_begin(arr, &entry);
+        bson_append_utf8(&entry, "k", -1, key, -1);
+        bson_append_iter(&entry, "v", -1, &dit);
+        bson_array_builder_append_document_end(arr, &entry);
+      }
+    }
+    bson_append_array_builder_end(&built, arr);
+    auto out = bytes_from_bson(built);
+    bson_destroy(&built);
+    return out;
+  }
+
+  if (std::string_view(op) == "$arrayToObject") {
+    // {$arrayToObject: <array of {k, v} or [k, v] entries>}
+    const auto args = evaluate_array_elements(source_doc, op_it);
+    if (args.size() != 1 || args[0].empty() || nullish_wrapped(args[0])) return wrap_null();
+    bson_t holder;
+    bson_iter_t it;
+    if (!unwrap_iter(args[0], &holder, &it) || bson_iter_type(&it) != BSON_TYPE_ARRAY) {
+      return wrap_null();
+    }
+    std::uint32_t alen = 0;
+    const std::uint8_t* adata = nullptr;
+    bson_iter_array(&it, &alen, &adata);
+    bson_t inner;
+    if (!bson_init_static(&inner, adata, alen)) return wrap_null();
+
+    bson_t built;
+    bson_init(&built);
+    bson_t obj;
+    bson_append_document_begin(&built, "v", -1, &obj);
+    bson_iter_t ait;
+    if (bson_iter_init(&ait, &inner)) {
+      while (bson_iter_next(&ait)) {
+        if (bson_iter_type(&ait) == BSON_TYPE_DOCUMENT) {
+          // {k, v} object form
+          std::uint32_t elen = 0;
+          const std::uint8_t* edata = nullptr;
+          bson_iter_document(&ait, &elen, &edata);
+          bson_t entry;
+          if (!bson_init_static(&entry, edata, elen)) continue;
+          bson_iter_t kit, vit;
+          if (!bson_iter_init_find(&kit, &entry, "k") ||
+              !bson_iter_init_find(&vit, &entry, "v") ||
+              bson_iter_type(&kit) != BSON_TYPE_UTF8) continue;
+          std::uint32_t klen = 0;
+          const char* key = bson_iter_utf8(&kit, &klen);
+          bson_append_iter(&obj, key, static_cast<int>(klen), &vit);
+        } else if (bson_iter_type(&ait) == BSON_TYPE_ARRAY) {
+          // [k, v] tuple form
+          std::uint32_t elen = 0;
+          const std::uint8_t* edata = nullptr;
+          bson_iter_array(&ait, &elen, &edata);
+          bson_t entry;
+          if (!bson_init_static(&entry, edata, elen)) continue;
+          bson_iter_t eit;
+          if (!bson_iter_init(&eit, &entry) || !bson_iter_next(&eit)) continue;
+          if (bson_iter_type(&eit) != BSON_TYPE_UTF8) continue;
+          std::uint32_t klen = 0;
+          const char* key = bson_iter_utf8(&eit, &klen);
+          if (!bson_iter_next(&eit)) continue;
+          bson_append_iter(&obj, key, static_cast<int>(klen), &eit);
+        }
+      }
+    }
+    bson_append_document_end(&built, &obj);
+    auto out = bytes_from_bson(built);
+    bson_destroy(&built);
+    return out;
+  }
+
+  if (std::string_view(op) == "$getField") {
+    // {$getField: {field, input}} or {$getField: <name>} (input := $$ROOT).
+    // Useful for keys with `.` or starting with `$` that resolve_path won't
+    // touch — we don't enforce that restriction, it just works on any key.
+    std::string field;
+    std::optional<std::vector<std::uint8_t>> input_wrapped;
+    if (bson_iter_type(&op_it) == BSON_TYPE_DOCUMENT) {
+      std::uint32_t len = 0;
+      const std::uint8_t* data = nullptr;
+      bson_iter_document(&op_it, &len, &data);
+      bson_t obj;
+      if (!bson_init_static(&obj, data, len)) return std::nullopt;
+      bson_iter_t f;
+      if (!bson_iter_init_find(&f, &obj, "field")) return std::nullopt;
+      auto fname = evaluate_expression(source_doc, wrap_iter_value(f));
+      if (!fname) return std::nullopt;
+      bson_t fh;
+      bson_iter_t fi;
+      if (!unwrap_iter(*fname, &fh, &fi) || bson_iter_type(&fi) != BSON_TYPE_UTF8) {
+        return std::nullopt;
+      }
+      std::uint32_t flen = 0;
+      const char* ftext = bson_iter_utf8(&fi, &flen);
+      field.assign(ftext, flen);
+      if (bson_iter_init_find(&f, &obj, "input")) {
+        input_wrapped = evaluate_expression(source_doc, wrap_iter_value(f));
+        if (!input_wrapped) return std::nullopt;
+      }
+    } else if (bson_iter_type(&op_it) == BSON_TYPE_UTF8) {
+      std::uint32_t flen = 0;
+      const char* ftext = bson_iter_utf8(&op_it, &flen);
+      field.assign(ftext, flen);
+    } else {
+      return std::nullopt;
+    }
+
+    // No explicit input → look up against source_doc directly. This is the
+    // $$CURRENT default that Mongo uses when input is omitted.
+    if (!input_wrapped) {
+      bson_iter_t value_iter;
+      if (bson_iter_init_find(&value_iter, &source_doc, field.c_str())) {
+        return wrap_iter_value(value_iter);
+      }
+      return std::nullopt;
+    }
+
+    // Object-form with explicit input: lookup field in that doc.
+    bson_t holder;
+    bson_iter_t in_it;
+    if (!unwrap_iter(*input_wrapped, &holder, &in_it) ||
+        bson_iter_type(&in_it) != BSON_TYPE_DOCUMENT) return std::nullopt;
+    std::uint32_t dlen = 0;
+    const std::uint8_t* ddata = nullptr;
+    bson_iter_document(&in_it, &dlen, &ddata);
+    bson_t doc;
+    if (!bson_init_static(&doc, ddata, dlen)) return std::nullopt;
+    bson_iter_t value_iter;
+    if (bson_iter_init_find(&value_iter, &doc, field.c_str())) {
+      return wrap_iter_value(value_iter);
+    }
+    return std::nullopt;
   }
 
   if (std::string_view(op) == "$arrayElemAt") {
@@ -1191,8 +1414,32 @@ std::optional<std::vector<std::uint8_t>> evaluate_operator_expression(
 
 }  // namespace
 
+namespace {
+
+// Cap on expression nesting. Protects the C++ stack against malicious
+// pipelines like {$add:[{$add:[{$add:[ ...thousands... ]}]}]} sent via the
+// REST API — without this, deep recursion overflows the stack and crashes
+// the engine process. Counter is thread-local because each iterator is
+// driven by a single thread; the RAII guard decrements on every exit path
+// including thrown exceptions.
+constexpr int kMaxExpressionDepth = 100;
+thread_local int g_expression_depth = 0;
+
+struct ExpressionDepthGuard {
+  bool exceeded;
+  ExpressionDepthGuard() {
+    exceeded = ++g_expression_depth > kMaxExpressionDepth;
+  }
+  ~ExpressionDepthGuard() { --g_expression_depth; }
+};
+
+}  // namespace
+
 std::optional<std::vector<std::uint8_t>> evaluate_expression(
     const bson_t& source_doc, const std::vector<std::uint8_t>& expr_bytes) {
+  ExpressionDepthGuard depth_guard;
+  if (depth_guard.exceeded) return std::nullopt;
+
   bson_t expr_holder;
   bson_iter_t expr_iter;
   if (!unwrap_iter(expr_bytes, &expr_holder, &expr_iter)) return std::nullopt;
@@ -1250,18 +1497,17 @@ std::optional<std::vector<std::uint8_t>> evaluate_expression(
 
     bson_t built;
     bson_init(&built);
-    bson_t arr;
-    bson_append_array_begin(&built, "v", -1, &arr);
+    bson_array_builder_t* arr = nullptr;
+    bson_append_array_builder_begin(&built, "v", -1, &arr);
     bson_iter_t child;
-    std::size_t index = 0;
     if (bson_iter_init(&child, &expr_array)) {
       while (bson_iter_next(&child)) {
         auto child_value = evaluate_expression(source_doc, wrap_iter_value(child));
         if (!child_value) continue;
-        append_wrapped_array_item(&arr, index++, *child_value);
+        append_wrapped_array_item(arr, *child_value);
       }
     }
-    bson_append_array_end(&built, &arr);
+    bson_append_array_builder_end(&built, arr);
     auto out = bytes_from_bson(built);
     bson_destroy(&built);
     return out;

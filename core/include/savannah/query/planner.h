@@ -11,6 +11,7 @@
 //   - Multikey deferred (paths whose value is BSON_TYPE_ARRAY are skipped).
 
 #include "savannah/index/manager.h"
+#include "savannah/storage/record_id.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -27,8 +28,10 @@ struct RangeBound {
 };
 
 struct LookupPlan {
-  std::string field_path;
-  std::optional<index::IndexedValue> exact_key;     // set for equality
+  std::string field_path;                           // set for single-field plans
+  std::vector<std::string> compound_field_paths;    // set for compound plans
+  std::optional<index::IndexedValue> exact_key;     // single-field equality
+  index::MultiKey compound_exact_key;               // compound equality
   std::optional<RangeBound> lower_bound;            // set for $gt/$gte
   std::optional<RangeBound> upper_bound;            // set for $lt/$lte
 };
@@ -55,8 +58,8 @@ std::optional<SortPlan> plan_index_sort(
     const index::IndexManager& indexes,
     std::span<const std::uint8_t> sort_bytes);
 
-// Materialize a plan into the slot id list the index recorded.
-std::vector<std::size_t> snapshot_from_lookup_plan(
+// Materialize a plan into the RecordId list the index recorded.
+std::vector<::savannah::storage::RecordId> snapshot_from_lookup_plan(
     const index::IndexManager& indexes, const LookupPlan& plan);
 
 }  // namespace savannah::jungle::query::v1

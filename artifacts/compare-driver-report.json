@@ -1,0 +1,2144 @@
+{
+  "summary": {
+    "comparedAt": "2026-05-05T19:18:12.838Z",
+    "savannahUri": "mongodb://127.0.0.1:27019/?serverSelectionTimeoutMS=3000&directConnection=true",
+    "mongoUri": "mongodb://127.0.0.1:27017/?serverSelectionTimeoutMS=3000&directConnection=true",
+    "dbPrefix": "compare_driver",
+    "selectedCases": [
+      "hello-shape",
+      "ping-shape",
+      "buildinfo-shape",
+      "index-create-list-drop",
+      "find-filter-projection-sort-window",
+      "find-mixed-type-sort",
+      "find-indexed-sparse-sort",
+      "update-delete-upsert-state",
+      "aggregate-group-and-sparse-semantics",
+      "aggregate-expression-families",
+      "aggregate-array-and-object-helpers",
+      "aggregate-unwind-and-lookup",
+      "aggregate-sparse-lookup-null-matching",
+      "listcommands-core-surface",
+      "distinct-basic-values",
+      "lookup-pipeline-form"
+    ],
+    "counts": {
+      "match": 16
+    }
+  },
+  "cases": [
+    {
+      "name": "hello-shape",
+      "expectation": "match",
+      "tags": [
+        "wire",
+        "admin",
+        "hello"
+      ],
+      "featureRefs": [
+        "command:hello"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:hello",
+          "status": "partial",
+          "note": "Handshake response advertises a MongoDB 6.0-style server, but client metadata, compression, speculative auth, and many hello request/response features are missing."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__hello_shape_191811_s",
+        "mongo": "compare__hello_shape_191811_m"
+      },
+      "durationMs": 41,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "hasConnectionId": true,
+          "hasMaxBsonObjectSize": true,
+          "hasMaxMessageSizeBytes": true,
+          "hasMaxWriteBatchSize": true,
+          "hasSessionTimeout": true,
+          "hasTopologyVersion": true,
+          "isWritablePrimary": true,
+          "maxWireVersionAtLeast17": true,
+          "minWireVersionIsNumber": true,
+          "ok": true
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "hasConnectionId": true,
+          "hasMaxBsonObjectSize": true,
+          "hasMaxMessageSizeBytes": true,
+          "hasMaxWriteBatchSize": true,
+          "hasSessionTimeout": true,
+          "hasTopologyVersion": true,
+          "isWritablePrimary": true,
+          "maxWireVersionAtLeast17": true,
+          "minWireVersionIsNumber": true,
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "ping-shape",
+      "expectation": "match",
+      "tags": [
+        "wire",
+        "admin",
+        "ping"
+      ],
+      "featureRefs": [
+        "command:ping"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:ping",
+          "status": "stub",
+          "note": "Trivial success response only."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__ping_shape_191811_s",
+        "mongo": "compare__ping_shape_191811_m"
+      },
+      "durationMs": 4,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "ok": true
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "buildinfo-shape",
+      "expectation": "match",
+      "tags": [
+        "wire",
+        "admin",
+        "buildinfo"
+      ],
+      "featureRefs": [
+        "command:buildInfo"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:buildInfo",
+          "status": "stub",
+          "note": "Static stub response; does not reflect a real storage engine, feature set, or build metadata."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__buildinfo_shape_191811_s",
+        "mongo": "compare__buildinfo_shape_191811_m"
+      },
+      "durationMs": 9,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "bitsIsNumber": true,
+          "debugIsBoolean": true,
+          "hasGitVersion": true,
+          "hasVersion": true,
+          "hasVersionArray": true,
+          "ok": true
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "bitsIsNumber": true,
+          "debugIsBoolean": true,
+          "hasGitVersion": true,
+          "hasVersion": true,
+          "hasVersionArray": true,
+          "ok": true
+        }
+      }
+    },
+    {
+      "name": "index-create-list-drop",
+      "expectation": "match",
+      "tags": [
+        "wire",
+        "index",
+        "subcommand"
+      ],
+      "featureRefs": [
+        "command:createIndexes",
+        "command:listIndexes",
+        "command:dropIndexes"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:createIndexes",
+          "status": "partial",
+          "note": "Index command surface is narrower than MongoDB; advanced index options are not fully modeled."
+        },
+        {
+          "ref": "command:listIndexes",
+          "status": "partial",
+          "note": "List-indexes exists, but only the current in-memory index model is exposed."
+        },
+        {
+          "ref": "command:dropIndexes",
+          "status": "partial",
+          "note": "Drop-index command surface is narrower than MongoDB."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__index_create_list_dr_191811_s",
+        "mongo": "compare__index_create_list_dr_191811_m"
+      },
+      "durationMs": 224,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "afterDrop": {
+            "$numberInt": "0"
+          },
+          "created": [
+            {
+              "key": {
+                "value": {
+                  "$numberInt": "1"
+                }
+              },
+              "name": "value_1"
+            }
+          ]
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "afterDrop": {
+            "$numberInt": "0"
+          },
+          "created": [
+            {
+              "key": {
+                "value": {
+                  "$numberInt": "1"
+                }
+              },
+              "name": "value_1"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "find-filter-projection-sort-window",
+      "expectation": "match",
+      "tags": [
+        "find",
+        "query",
+        "projection",
+        "sort"
+      ],
+      "featureRefs": [
+        "command:find",
+        "query-op:$eq"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:find",
+          "status": "partial",
+          "note": "Find supports filter/sort/projection/skip/limit/batchSize, but much of the official command option surface is still missing."
+        },
+        {
+          "ref": "query-op:$eq",
+          "status": "implemented",
+          "note": null
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__find_filter_projecti_191811_s",
+        "mongo": "compare__find_filter_projecti_191811_m"
+      },
+      "durationMs": 47,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "nyc": [
+            {
+              "pop": {
+                "$numberInt": "8000"
+              }
+            }
+          ],
+          "window": [
+            {
+              "city": "LA",
+              "pop": {
+                "$numberInt": "4000"
+              }
+            }
+          ]
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "nyc": [
+            {
+              "pop": {
+                "$numberInt": "8000"
+              }
+            }
+          ],
+          "window": [
+            {
+              "city": "LA",
+              "pop": {
+                "$numberInt": "4000"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "find-mixed-type-sort",
+      "expectation": "match",
+      "tags": [
+        "find",
+        "sort",
+        "mixed-types"
+      ],
+      "featureRefs": [
+        "command:find"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:find",
+          "status": "partial",
+          "note": "Find supports filter/sort/projection/skip/limit/batchSize, but much of the official command option surface is still missing."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__find_mixed_type_sort_191811_s",
+        "mongo": "compare__find_mixed_type_sort_191811_m"
+      },
+      "durationMs": 37,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "asc": {
+            "nullishBag": [
+              "bool",
+              "string"
+            ],
+            "orderedPrefix": [
+              "missing",
+              "null",
+              "number"
+            ]
+          },
+          "desc": {
+            "nullishBag": [
+              "missing",
+              "null"
+            ],
+            "orderedPrefix": [
+              "bool",
+              "string",
+              "number"
+            ]
+          }
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "asc": {
+            "nullishBag": [
+              "bool",
+              "string"
+            ],
+            "orderedPrefix": [
+              "missing",
+              "null",
+              "number"
+            ]
+          },
+          "desc": {
+            "nullishBag": [
+              "missing",
+              "null"
+            ],
+            "orderedPrefix": [
+              "bool",
+              "string",
+              "number"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "find-indexed-sparse-sort",
+      "expectation": "match",
+      "tags": [
+        "find",
+        "sort",
+        "index",
+        "mixed-types"
+      ],
+      "featureRefs": [
+        "command:find",
+        "command:createIndexes"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:find",
+          "status": "partial",
+          "note": "Find supports filter/sort/projection/skip/limit/batchSize, but much of the official command option surface is still missing."
+        },
+        {
+          "ref": "command:createIndexes",
+          "status": "partial",
+          "note": "Index command surface is narrower than MongoDB; advanced index options are not fully modeled."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__find_indexed_sparse__191811_s",
+        "mongo": "compare__find_indexed_sparse__191811_m"
+      },
+      "durationMs": 87,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "asc": {
+            "nullishBag": [
+              "bool",
+              "null-b",
+              "number",
+              "string"
+            ],
+            "orderedPrefix": [
+              "missing-a",
+              "null-a",
+              "missing-b"
+            ]
+          },
+          "desc": {
+            "nullishBag": [
+              "missing-a",
+              "missing-b",
+              "null-a",
+              "null-b"
+            ],
+            "orderedPrefix": [
+              "bool",
+              "string",
+              "number"
+            ]
+          }
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "asc": {
+            "nullishBag": [
+              "bool",
+              "null-b",
+              "number",
+              "string"
+            ],
+            "orderedPrefix": [
+              "missing-a",
+              "null-a",
+              "missing-b"
+            ]
+          },
+          "desc": {
+            "nullishBag": [
+              "missing-a",
+              "missing-b",
+              "null-a",
+              "null-b"
+            ],
+            "orderedPrefix": [
+              "bool",
+              "string",
+              "number"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "update-delete-upsert-state",
+      "expectation": "match",
+      "tags": [
+        "update",
+        "delete",
+        "write"
+      ],
+      "featureRefs": [
+        "command:update",
+        "command:delete",
+        "update-op:$set",
+        "update-op:$inc"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:update",
+          "status": "partial",
+          "note": "Update command exists, but only a small subset of update operators and command options is implemented."
+        },
+        {
+          "ref": "command:delete",
+          "status": "partial",
+          "note": "Delete command exists, but the broader MongoDB write-command option surface is not fully implemented."
+        },
+        {
+          "ref": "update-op:$set",
+          "status": "partial",
+          "note": "Top-level field updates work; dotted-path update semantics are still incomplete."
+        },
+        {
+          "ref": "update-op:$inc",
+          "status": "partial",
+          "note": "Top-level field updates work; dotted-path update semantics are still incomplete."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__update_delete_upsert_191811_s",
+        "mongo": "compare__update_delete_upsert_191811_m"
+      },
+      "durationMs": 57,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "counts": {
+            "deleteMany": {
+              "$numberInt": "2"
+            },
+            "deleteOne": {
+              "$numberInt": "1"
+            },
+            "incMatched": {
+              "$numberInt": "4"
+            },
+            "incModified": {
+              "$numberInt": "4"
+            },
+            "replaceMatched": {
+              "$numberInt": "1"
+            },
+            "replaceModified": {
+              "$numberInt": "1"
+            },
+            "setMatched": {
+              "$numberInt": "1"
+            },
+            "setModified": {
+              "$numberInt": "1"
+            },
+            "upsertedCount": {
+              "$numberInt": "1"
+            }
+          },
+          "finalDocs": [
+            {
+              "_id": "1",
+              "n": {
+                "$numberInt": "1"
+              },
+              "replaced": true
+            },
+            {
+              "_id": "upserted",
+              "label": "inserted-by-upsert",
+              "n": {
+                "$numberInt": "999"
+              }
+            }
+          ]
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "counts": {
+            "deleteMany": {
+              "$numberInt": "2"
+            },
+            "deleteOne": {
+              "$numberInt": "1"
+            },
+            "incMatched": {
+              "$numberInt": "4"
+            },
+            "incModified": {
+              "$numberInt": "4"
+            },
+            "replaceMatched": {
+              "$numberInt": "1"
+            },
+            "replaceModified": {
+              "$numberInt": "1"
+            },
+            "setMatched": {
+              "$numberInt": "1"
+            },
+            "setModified": {
+              "$numberInt": "1"
+            },
+            "upsertedCount": {
+              "$numberInt": "1"
+            }
+          },
+          "finalDocs": [
+            {
+              "_id": "1",
+              "n": {
+                "$numberInt": "1"
+              },
+              "replaced": true
+            },
+            {
+              "_id": "upserted",
+              "label": "inserted-by-upsert",
+              "n": {
+                "$numberInt": "999"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "aggregate-group-and-sparse-semantics",
+      "expectation": "match",
+      "tags": [
+        "aggregation",
+        "group"
+      ],
+      "featureRefs": [
+        "command:aggregate",
+        "agg-stage:$match",
+        "agg-stage:$group",
+        "agg-stage:$sort",
+        "agg-stage:$sortByCount",
+        "agg-accum:$sum",
+        "agg-accum:$avg",
+        "agg-accum:$min",
+        "agg-accum:$max",
+        "agg-accum:$first",
+        "agg-accum:$last",
+        "agg-accum:$push"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:aggregate",
+          "status": "partial",
+          "note": "Aggregation command shell exists, but only a subset of pipeline stages/operators is implemented and many aggregate options are ignored."
+        },
+        {
+          "ref": "agg-stage:$match",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-stage:$group",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-stage:$sort",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-stage:$sortByCount",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-accum:$sum",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-accum:$avg",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-accum:$min",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-accum:$max",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-accum:$first",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-accum:$last",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-accum:$push",
+          "status": "implemented",
+          "note": null
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__aggregate_group_and__191811_s",
+        "mongo": "compare__aggregate_group_and__191811_m"
+      },
+      "durationMs": 503,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "grouped": [
+            {
+              "_id": "cat",
+              "avgScore": {
+                "$numberDouble": "3.5"
+              },
+              "maxScore": {
+                "$numberInt": "5"
+              },
+              "minScore": {
+                "$numberInt": "2"
+              },
+              "total": {
+                "$numberInt": "2"
+              }
+            },
+            {
+              "_id": "dog",
+              "avgScore": {
+                "$numberInt": "3"
+              },
+              "maxScore": {
+                "$numberInt": "3"
+              },
+              "minScore": {
+                "$numberInt": "3"
+              },
+              "total": {
+                "$numberInt": "1"
+              }
+            }
+          ],
+          "sortByCount": [
+            {
+              "_id": "cat",
+              "count": {
+                "$numberInt": "2"
+              }
+            },
+            {
+              "_id": "dog",
+              "count": {
+                "$numberInt": "1"
+              }
+            }
+          ],
+          "sparse": [
+            {
+              "_id": null,
+              "count": {
+                "$numberInt": "2"
+              },
+              "firstValue": {
+                "$numberInt": "2"
+              },
+              "lastValue": null,
+              "values": [
+                {
+                  "$numberInt": "2"
+                }
+              ]
+            },
+            {
+              "_id": "a",
+              "count": {
+                "$numberInt": "2"
+              },
+              "firstValue": {
+                "$numberInt": "1"
+              },
+              "lastValue": null,
+              "values": [
+                {
+                  "$numberInt": "1"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "grouped": [
+            {
+              "_id": "cat",
+              "avgScore": {
+                "$numberDouble": "3.5"
+              },
+              "maxScore": {
+                "$numberInt": "5"
+              },
+              "minScore": {
+                "$numberInt": "2"
+              },
+              "total": {
+                "$numberInt": "2"
+              }
+            },
+            {
+              "_id": "dog",
+              "avgScore": {
+                "$numberInt": "3"
+              },
+              "maxScore": {
+                "$numberInt": "3"
+              },
+              "minScore": {
+                "$numberInt": "3"
+              },
+              "total": {
+                "$numberInt": "1"
+              }
+            }
+          ],
+          "sortByCount": [
+            {
+              "_id": "cat",
+              "count": {
+                "$numberInt": "2"
+              }
+            },
+            {
+              "_id": "dog",
+              "count": {
+                "$numberInt": "1"
+              }
+            }
+          ],
+          "sparse": [
+            {
+              "_id": null,
+              "count": {
+                "$numberInt": "2"
+              },
+              "firstValue": {
+                "$numberInt": "2"
+              },
+              "lastValue": null,
+              "values": [
+                {
+                  "$numberInt": "2"
+                }
+              ]
+            },
+            {
+              "_id": "a",
+              "count": {
+                "$numberInt": "2"
+              },
+              "firstValue": {
+                "$numberInt": "1"
+              },
+              "lastValue": null,
+              "values": [
+                {
+                  "$numberInt": "1"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "aggregate-expression-families",
+      "expectation": "match",
+      "tags": [
+        "aggregation",
+        "expressions"
+      ],
+      "featureRefs": [
+        "command:aggregate",
+        "agg-stage:$project",
+        "agg-expr:$concat",
+        "agg-expr:$toString",
+        "agg-expr:$ifNull",
+        "agg-expr:$multiply",
+        "agg-expr:$add",
+        "agg-expr:$divide",
+        "agg-expr:$mod",
+        "agg-expr:$subtract",
+        "agg-expr:$abs",
+        "agg-expr:$round",
+        "agg-expr:$cond",
+        "agg-expr:$switch",
+        "agg-expr:$and",
+        "agg-expr:$or",
+        "agg-expr:$not",
+        "agg-expr:$toUpper",
+        "agg-expr:$toLower",
+        "agg-expr:$trim",
+        "agg-expr:$substr",
+        "agg-expr:$split",
+        "agg-expr:$strLenCP",
+        "agg-expr:$type",
+        "agg-expr:$toInt",
+        "agg-expr:$toDouble",
+        "agg-expr:$toBool",
+        "agg-expr:$isNumber"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:aggregate",
+          "status": "partial",
+          "note": "Aggregation command shell exists, but only a subset of pipeline stages/operators is implemented and many aggregate options are ignored."
+        },
+        {
+          "ref": "agg-stage:$project",
+          "status": "partial",
+          "note": "Dotted output paths are deferred, so nested projection writes are not MongoDB-complete."
+        },
+        {
+          "ref": "agg-expr:$concat",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$toString",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$ifNull",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$multiply",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$add",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$divide",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$mod",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$subtract",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$abs",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$round",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$cond",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$switch",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$and",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$or",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$not",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$toUpper",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$toLower",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$trim",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$substr",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$split",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$strLenCP",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$type",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$toInt",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$toDouble",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$toBool",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$isNumber",
+          "status": "implemented",
+          "note": null
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__aggregate_expression_191811_s",
+        "mongo": "compare__aggregate_expression_191811_m"
+      },
+      "durationMs": 32,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": [
+          {
+            "absDelta": {
+              "$numberInt": "1"
+            },
+            "boolFromInt": true,
+            "bucket": "small",
+            "catOrLow": true,
+            "delta": {
+              "$numberInt": "-1"
+            },
+            "doubled": {
+              "$numberInt": "4"
+            },
+            "fallback": "fallback",
+            "first3": "cat",
+            "half": {
+              "$numberInt": "1"
+            },
+            "isCatHigh": false,
+            "isScoreNum": true,
+            "kind": "cat",
+            "label": "cat:2",
+            "len": {
+              "$numberInt": "3"
+            },
+            "lower": "cat",
+            "notCat": false,
+            "parsedDouble": {
+              "$numberDouble": "3.14"
+            },
+            "parsedInt": {
+              "$numberInt": "42"
+            },
+            "parts": [
+              "a",
+              "b",
+              "c"
+            ],
+            "plusOne": {
+              "$numberInt": "3"
+            },
+            "remainder": {
+              "$numberInt": "0"
+            },
+            "score": {
+              "$numberInt": "2"
+            },
+            "scoreType": "int",
+            "tier": "low",
+            "trimmed": "hi",
+            "upper": "CAT"
+          },
+          {
+            "absDelta": {
+              "$numberInt": "0"
+            },
+            "boolFromInt": true,
+            "bucket": "medium",
+            "catOrLow": false,
+            "delta": {
+              "$numberInt": "0"
+            },
+            "doubled": {
+              "$numberInt": "6"
+            },
+            "fallback": "fallback",
+            "first3": "dog",
+            "half": {
+              "$numberDouble": "1.5"
+            },
+            "isCatHigh": false,
+            "isScoreNum": true,
+            "kind": "dog",
+            "label": "dog:3",
+            "len": {
+              "$numberInt": "3"
+            },
+            "lower": "dog",
+            "notCat": true,
+            "parsedDouble": {
+              "$numberDouble": "3.14"
+            },
+            "parsedInt": {
+              "$numberInt": "42"
+            },
+            "parts": [
+              "a",
+              "b",
+              "c"
+            ],
+            "plusOne": {
+              "$numberInt": "4"
+            },
+            "remainder": {
+              "$numberInt": "1"
+            },
+            "score": {
+              "$numberInt": "3"
+            },
+            "scoreType": "int",
+            "tier": "low",
+            "trimmed": "hi",
+            "upper": "DOG"
+          },
+          {
+            "absDelta": {
+              "$numberInt": "2"
+            },
+            "boolFromInt": true,
+            "bucket": "large",
+            "catOrLow": true,
+            "delta": {
+              "$numberInt": "2"
+            },
+            "doubled": {
+              "$numberInt": "10"
+            },
+            "fallback": "fallback",
+            "first3": "cat",
+            "half": {
+              "$numberDouble": "2.5"
+            },
+            "isCatHigh": true,
+            "isScoreNum": true,
+            "kind": "cat",
+            "label": "cat:5",
+            "len": {
+              "$numberInt": "3"
+            },
+            "lower": "cat",
+            "notCat": false,
+            "parsedDouble": {
+              "$numberDouble": "3.14"
+            },
+            "parsedInt": {
+              "$numberInt": "42"
+            },
+            "parts": [
+              "a",
+              "b",
+              "c"
+            ],
+            "plusOne": {
+              "$numberInt": "6"
+            },
+            "remainder": {
+              "$numberInt": "1"
+            },
+            "score": {
+              "$numberInt": "5"
+            },
+            "scoreType": "int",
+            "tier": "high",
+            "trimmed": "hi",
+            "upper": "CAT"
+          }
+        ]
+      },
+      "mongo": {
+        "ok": true,
+        "value": [
+          {
+            "absDelta": {
+              "$numberInt": "1"
+            },
+            "boolFromInt": true,
+            "bucket": "small",
+            "catOrLow": true,
+            "delta": {
+              "$numberInt": "-1"
+            },
+            "doubled": {
+              "$numberInt": "4"
+            },
+            "fallback": "fallback",
+            "first3": "cat",
+            "half": {
+              "$numberInt": "1"
+            },
+            "isCatHigh": false,
+            "isScoreNum": true,
+            "kind": "cat",
+            "label": "cat:2",
+            "len": {
+              "$numberInt": "3"
+            },
+            "lower": "cat",
+            "notCat": false,
+            "parsedDouble": {
+              "$numberDouble": "3.14"
+            },
+            "parsedInt": {
+              "$numberInt": "42"
+            },
+            "parts": [
+              "a",
+              "b",
+              "c"
+            ],
+            "plusOne": {
+              "$numberInt": "3"
+            },
+            "remainder": {
+              "$numberInt": "0"
+            },
+            "score": {
+              "$numberInt": "2"
+            },
+            "scoreType": "int",
+            "tier": "low",
+            "trimmed": "hi",
+            "upper": "CAT"
+          },
+          {
+            "absDelta": {
+              "$numberInt": "0"
+            },
+            "boolFromInt": true,
+            "bucket": "medium",
+            "catOrLow": false,
+            "delta": {
+              "$numberInt": "0"
+            },
+            "doubled": {
+              "$numberInt": "6"
+            },
+            "fallback": "fallback",
+            "first3": "dog",
+            "half": {
+              "$numberDouble": "1.5"
+            },
+            "isCatHigh": false,
+            "isScoreNum": true,
+            "kind": "dog",
+            "label": "dog:3",
+            "len": {
+              "$numberInt": "3"
+            },
+            "lower": "dog",
+            "notCat": true,
+            "parsedDouble": {
+              "$numberDouble": "3.14"
+            },
+            "parsedInt": {
+              "$numberInt": "42"
+            },
+            "parts": [
+              "a",
+              "b",
+              "c"
+            ],
+            "plusOne": {
+              "$numberInt": "4"
+            },
+            "remainder": {
+              "$numberInt": "1"
+            },
+            "score": {
+              "$numberInt": "3"
+            },
+            "scoreType": "int",
+            "tier": "low",
+            "trimmed": "hi",
+            "upper": "DOG"
+          },
+          {
+            "absDelta": {
+              "$numberInt": "2"
+            },
+            "boolFromInt": true,
+            "bucket": "large",
+            "catOrLow": true,
+            "delta": {
+              "$numberInt": "2"
+            },
+            "doubled": {
+              "$numberInt": "10"
+            },
+            "fallback": "fallback",
+            "first3": "cat",
+            "half": {
+              "$numberDouble": "2.5"
+            },
+            "isCatHigh": true,
+            "isScoreNum": true,
+            "kind": "cat",
+            "label": "cat:5",
+            "len": {
+              "$numberInt": "3"
+            },
+            "lower": "cat",
+            "notCat": false,
+            "parsedDouble": {
+              "$numberDouble": "3.14"
+            },
+            "parsedInt": {
+              "$numberInt": "42"
+            },
+            "parts": [
+              "a",
+              "b",
+              "c"
+            ],
+            "plusOne": {
+              "$numberInt": "6"
+            },
+            "remainder": {
+              "$numberInt": "1"
+            },
+            "score": {
+              "$numberInt": "5"
+            },
+            "scoreType": "int",
+            "tier": "high",
+            "trimmed": "hi",
+            "upper": "CAT"
+          }
+        ]
+      }
+    },
+    {
+      "name": "aggregate-array-and-object-helpers",
+      "expectation": "match",
+      "tags": [
+        "aggregation",
+        "arrays",
+        "objects"
+      ],
+      "featureRefs": [
+        "command:aggregate",
+        "agg-stage:$addFields",
+        "agg-expr:$arrayElemAt",
+        "agg-expr:$size",
+        "agg-expr:$literal",
+        "agg-expr:$pow",
+        "agg-expr:$sqrt",
+        "agg-expr:$log",
+        "agg-expr:$concatArrays",
+        "agg-expr:$slice",
+        "agg-expr:$range",
+        "agg-expr:$in",
+        "agg-expr:$isArray",
+        "agg-expr:$first",
+        "agg-expr:$last",
+        "agg-expr:$reverseArray",
+        "agg-expr:$mergeObjects",
+        "agg-expr:$objectToArray",
+        "agg-expr:$arrayToObject",
+        "agg-expr:$getField"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:aggregate",
+          "status": "partial",
+          "note": "Aggregation command shell exists, but only a subset of pipeline stages/operators is implemented and many aggregate options are ignored."
+        },
+        {
+          "ref": "agg-stage:$addFields",
+          "status": "partial",
+          "note": "Dotted output paths are deferred, so nested writes are not MongoDB-complete."
+        },
+        {
+          "ref": "agg-expr:$arrayElemAt",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$size",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$literal",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$pow",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$sqrt",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$log",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$concatArrays",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$slice",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$range",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$in",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$isArray",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$first",
+          "status": "unknown",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$last",
+          "status": "unknown",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$reverseArray",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$mergeObjects",
+          "status": "unknown",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$objectToArray",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$arrayToObject",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-expr:$getField",
+          "status": "implemented",
+          "note": null
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__aggregate_array_and__191811_s",
+        "mongo": "compare__aggregate_array_and__191811_m"
+      },
+      "durationMs": 27,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": [
+          {
+            "bundleSize": {
+              "$numberInt": "2"
+            },
+            "contains": true,
+            "dottedLiteralKey": {
+              "$numberInt": "2"
+            },
+            "fetchedKind": "cat",
+            "firstEl": {
+              "$numberInt": "10"
+            },
+            "firstItem": "cat",
+            "isArr": true,
+            "kvPairs": [
+              {
+                "k": "kind",
+                "v": "cat"
+              },
+              {
+                "k": "score",
+                "v": {
+                  "$numberInt": "2"
+                }
+              }
+            ],
+            "lastEl": {
+              "$numberInt": "30"
+            },
+            "literalDollar": "$score",
+            "logBase": {
+              "$numberInt": "2"
+            },
+            "maybeScore": {
+              "$numberInt": "2"
+            },
+            "merged": [
+              {
+                "$numberInt": "1"
+              },
+              {
+                "$numberInt": "2"
+              },
+              {
+                "$numberInt": "3"
+              },
+              {
+                "$numberInt": "4"
+              }
+            ],
+            "mergedDoc": {
+              "base": false,
+              "kind": "cat",
+              "score": {
+                "$numberInt": "2"
+              }
+            },
+            "power": {
+              "$numberInt": "256"
+            },
+            "ranged": [
+              {
+                "$numberInt": "0"
+              },
+              {
+                "$numberInt": "1"
+              },
+              {
+                "$numberInt": "2"
+              },
+              {
+                "$numberInt": "3"
+              },
+              {
+                "$numberInt": "4"
+              }
+            ],
+            "rebuiltDoc": {
+              "kind": "cat",
+              "score": {
+                "$numberInt": "2"
+              }
+            },
+            "reversed": [
+              {
+                "$numberInt": "3"
+              },
+              {
+                "$numberInt": "2"
+              },
+              {
+                "$numberInt": "1"
+              }
+            ],
+            "rooted": {
+              "$numberInt": "4"
+            },
+            "sliced": [
+              {
+                "$numberInt": "20"
+              },
+              {
+                "$numberInt": "30"
+              }
+            ]
+          }
+        ]
+      },
+      "mongo": {
+        "ok": true,
+        "value": [
+          {
+            "bundleSize": {
+              "$numberInt": "2"
+            },
+            "contains": true,
+            "dottedLiteralKey": {
+              "$numberInt": "2"
+            },
+            "fetchedKind": "cat",
+            "firstEl": {
+              "$numberInt": "10"
+            },
+            "firstItem": "cat",
+            "isArr": true,
+            "kvPairs": [
+              {
+                "k": "kind",
+                "v": "cat"
+              },
+              {
+                "k": "score",
+                "v": {
+                  "$numberInt": "2"
+                }
+              }
+            ],
+            "lastEl": {
+              "$numberInt": "30"
+            },
+            "literalDollar": "$score",
+            "logBase": {
+              "$numberInt": "2"
+            },
+            "maybeScore": {
+              "$numberInt": "2"
+            },
+            "merged": [
+              {
+                "$numberInt": "1"
+              },
+              {
+                "$numberInt": "2"
+              },
+              {
+                "$numberInt": "3"
+              },
+              {
+                "$numberInt": "4"
+              }
+            ],
+            "mergedDoc": {
+              "base": false,
+              "kind": "cat",
+              "score": {
+                "$numberInt": "2"
+              }
+            },
+            "power": {
+              "$numberInt": "256"
+            },
+            "ranged": [
+              {
+                "$numberInt": "0"
+              },
+              {
+                "$numberInt": "1"
+              },
+              {
+                "$numberInt": "2"
+              },
+              {
+                "$numberInt": "3"
+              },
+              {
+                "$numberInt": "4"
+              }
+            ],
+            "rebuiltDoc": {
+              "kind": "cat",
+              "score": {
+                "$numberInt": "2"
+              }
+            },
+            "reversed": [
+              {
+                "$numberInt": "3"
+              },
+              {
+                "$numberInt": "2"
+              },
+              {
+                "$numberInt": "1"
+              }
+            ],
+            "rooted": {
+              "$numberInt": "4"
+            },
+            "sliced": [
+              {
+                "$numberInt": "20"
+              },
+              {
+                "$numberInt": "30"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "aggregate-unwind-and-lookup",
+      "expectation": "match",
+      "tags": [
+        "aggregation",
+        "lookup",
+        "unwind"
+      ],
+      "featureRefs": [
+        "command:aggregate",
+        "agg-stage:$lookup",
+        "agg-stage:$unwind",
+        "agg-stage:$replaceRoot",
+        "agg-stage:$replaceWith"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:aggregate",
+          "status": "partial",
+          "note": "Aggregation command shell exists, but only a subset of pipeline stages/operators is implemented and many aggregate options are ignored."
+        },
+        {
+          "ref": "agg-stage:$lookup",
+          "status": "partial",
+          "note": "Only localField/foreignField form is implemented; pipeline form, let variables, and broader lookup semantics are missing."
+        },
+        {
+          "ref": "agg-stage:$unwind",
+          "status": "partial",
+          "note": "Dotted paths are deferred."
+        },
+        {
+          "ref": "agg-stage:$replaceRoot",
+          "status": "implemented",
+          "note": null
+        },
+        {
+          "ref": "agg-stage:$replaceWith",
+          "status": "implemented",
+          "note": null
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__aggregate_unwind_and_191811_s",
+        "mongo": "compare__aggregate_unwind_and_191811_m"
+      },
+      "durationMs": 70,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "joined": [
+            {
+              "owner": "alice",
+              "pet": "milo"
+            }
+          ],
+          "replaced": [
+            {
+              "ownerRef": "owner-a",
+              "petName": "milo",
+              "summary": "milo:owner-a"
+            }
+          ],
+          "unwind": [
+            {
+              "name": "alpha",
+              "tagIndex": {
+                "$numberInt": "0"
+              },
+              "tags": "x"
+            },
+            {
+              "name": "alpha",
+              "tagIndex": {
+                "$numberInt": "1"
+              },
+              "tags": "y"
+            },
+            {
+              "name": "beta",
+              "tagIndex": null
+            },
+            {
+              "name": "gamma",
+              "tagIndex": null
+            }
+          ]
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "joined": [
+            {
+              "owner": "alice",
+              "pet": "milo"
+            }
+          ],
+          "replaced": [
+            {
+              "ownerRef": "owner-a",
+              "petName": "milo",
+              "summary": "milo:owner-a"
+            }
+          ],
+          "unwind": [
+            {
+              "name": "alpha",
+              "tagIndex": {
+                "$numberInt": "0"
+              },
+              "tags": "x"
+            },
+            {
+              "name": "alpha",
+              "tagIndex": {
+                "$numberInt": "1"
+              },
+              "tags": "y"
+            },
+            {
+              "name": "beta",
+              "tagIndex": null
+            },
+            {
+              "name": "gamma",
+              "tagIndex": null
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "aggregate-sparse-lookup-null-matching",
+      "expectation": "match",
+      "tags": [
+        "aggregation",
+        "lookup",
+        "nulls"
+      ],
+      "featureRefs": [
+        "command:aggregate",
+        "agg-stage:$lookup"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:aggregate",
+          "status": "partial",
+          "note": "Aggregation command shell exists, but only a subset of pipeline stages/operators is implemented and many aggregate options are ignored."
+        },
+        {
+          "ref": "agg-stage:$lookup",
+          "status": "partial",
+          "note": "Only localField/foreignField form is implemented; pipeline form, let variables, and broader lookup semantics are missing."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__aggregate_sparse_loo_191811_s",
+        "mongo": "compare__aggregate_sparse_loo_191811_m"
+      },
+      "durationMs": 48,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": [
+          {
+            "matches": [
+              "missing",
+              "null"
+            ],
+            "name": "missing"
+          },
+          {
+            "matches": [
+              "missing",
+              "null"
+            ],
+            "name": "null"
+          },
+          {
+            "matches": [
+              "value"
+            ],
+            "name": "value"
+          }
+        ]
+      },
+      "mongo": {
+        "ok": true,
+        "value": [
+          {
+            "matches": [
+              "missing",
+              "null"
+            ],
+            "name": "missing"
+          },
+          {
+            "matches": [
+              "missing",
+              "null"
+            ],
+            "name": "null"
+          },
+          {
+            "matches": [
+              "value"
+            ],
+            "name": "value"
+          }
+        ]
+      }
+    },
+    {
+      "name": "listcommands-core-surface",
+      "expectation": "match",
+      "tags": [
+        "wire",
+        "subcommand",
+        "admin"
+      ],
+      "featureRefs": [
+        "command:listCommands"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:listCommands",
+          "status": "missing",
+          "note": "No command handler is present."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__listcommands_core_su_191811_s",
+        "mongo": "compare__listcommands_core_su_191811_m"
+      },
+      "durationMs": 17,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "core": [
+            "aggregate",
+            "find",
+            "insert",
+            "update",
+            "delete"
+          ]
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "core": [
+            "aggregate",
+            "find",
+            "insert",
+            "update",
+            "delete"
+          ]
+        }
+      }
+    },
+    {
+      "name": "distinct-basic-values",
+      "expectation": "match",
+      "tags": [
+        "query",
+        "subcommand",
+        "distinct"
+      ],
+      "featureRefs": [
+        "command:distinct"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:distinct",
+          "status": "missing",
+          "note": "No command handler is present."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__distinct_basic_value_191811_s",
+        "mongo": "compare__distinct_basic_value_191811_m"
+      },
+      "durationMs": 22,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": {
+          "values": [
+            "cat",
+            "dog"
+          ]
+        }
+      },
+      "mongo": {
+        "ok": true,
+        "value": {
+          "values": [
+            "cat",
+            "dog"
+          ]
+        }
+      }
+    },
+    {
+      "name": "lookup-pipeline-form",
+      "expectation": "match",
+      "tags": [
+        "aggregation",
+        "lookup"
+      ],
+      "featureRefs": [
+        "command:aggregate",
+        "agg-stage:$lookup"
+      ],
+      "featureCoverage": [
+        {
+          "ref": "command:aggregate",
+          "status": "partial",
+          "note": "Aggregation command shell exists, but only a subset of pipeline stages/operators is implemented and many aggregate options are ignored."
+        },
+        {
+          "ref": "agg-stage:$lookup",
+          "status": "partial",
+          "note": "Only localField/foreignField form is implemented; pipeline form, let variables, and broader lookup semantics are missing."
+        }
+      ],
+      "dbNames": {
+        "savannah": "compare__lookup_pipeline_form_191811_s",
+        "mongo": "compare__lookup_pipeline_form_191811_m"
+      },
+      "durationMs": 44,
+      "status": "match",
+      "equal": true,
+      "savannah": {
+        "ok": true,
+        "value": [
+          {
+            "name": "alice",
+            "pets": [
+              "milo",
+              "otis"
+            ]
+          },
+          {
+            "name": "bob",
+            "pets": [
+              "luna"
+            ]
+          }
+        ]
+      },
+      "mongo": {
+        "ok": true,
+        "value": [
+          {
+            "name": "alice",
+            "pets": [
+              "milo",
+              "otis"
+            ]
+          },
+          {
+            "name": "bob",
+            "pets": [
+              "luna"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

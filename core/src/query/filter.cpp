@@ -1,5 +1,6 @@
 #include "savannah/query/filter.h"
 
+#include "savannah/query/expression.h"
 #include "savannah/query/value.h"
 
 #include <bson/bson.h>
@@ -11,16 +12,30 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace savannah::jungle::query::v1 {
 
 namespace {
 
-// Forward declarations — operator evaluators recurse into match_doc for
+// Forward declarations - operator evaluators recurse into match_doc for
 // $and/$or, which in turn dispatches back through here.
 bool match_doc(bson::BsonView doc, std::span<const std::uint8_t> filter);
 
-// is_numeric, value_equal, value_compare live in query/value.cpp — single
+// Cap on $and/$or nesting. Matches the rationale on the expression
+// evaluator's depth cap — protects the C++ stack against pathologically
+// nested filters sent via the REST API. Counter is thread-local; the RAII
+// guard decrements on every exit path including thrown exceptions.
+constexpr int kMaxFilterDepth = 100;
+thread_local int g_filter_depth = 0;
+
+struct FilterDepthGuard {
+  bool exceeded;
+  FilterDepthGuard() { exceeded = ++g_filter_depth > kMaxFilterDepth; }
+  ~FilterDepthGuard() { --g_filter_depth; }
+};
+
+// is_numeric, value_equal, value_compare live in query/value.cpp - single
 // source of truth shared with sort and the index comparator.
 
 // ---------------------------------------------------------------------------
@@ -60,36 +75,75 @@ bool for_each_array_elem(bson_iter_t arr_iter, F&& fn) {
   return true;
 }
 
+// Forward decl — defined below, after `equals_or_contains`. We need it here
+// so $in/$nin can fall back to element-of-array semantics when the doc field
+// is itself an array.
+bool equals_or_contains(bson_iter_t filter_val, bson_iter_t doc_val);
+
 bool eval_in(bson_iter_t op_val, bool present, bson_iter_t doc_val) {
   if (!present) return false;
   bool any = false;
   for_each_array_elem(op_val, [&](bson_iter_t elem) {
-    if (!any && value_equal(elem, doc_val)) any = true;
+    if (!any && equals_or_contains(elem, doc_val)) any = true;
   });
   return any;
 }
 
 bool eval_nin(bson_iter_t op_val, bool present, bson_iter_t doc_val) {
-  if (!present) return true;  // Like $ne — missing field passes.
+  if (!present) return true;  // Like $ne - missing field passes.
   bool any = false;
   for_each_array_elem(op_val, [&](bson_iter_t elem) {
-    if (!any && value_equal(elem, doc_val)) any = true;
+    if (!any && equals_or_contains(elem, doc_val)) any = true;
   });
   return !any;
 }
 
 // MongoDB regex options to std::regex flags. We use the ECMAScript flavor,
 // which is close enough to PCRE for the patterns drivers commonly send.
-// Limitations: 's' (dotall) and 'x' (extended/verbose) aren't natively
-// supported by std::regex in ECMAScript mode — silently ignored for C4.
+// Notes:
+//   - 's' (dotall): not native to std::regex ECMAScript mode, but we
+//     emulate it by rewriting unescaped `.` outside char classes to
+//     `[\s\S]` (matches any char including newlines).
+//   - 'x' (extended/verbose): not supported. Silently ignored.
 std::regex_constants::syntax_option_type regex_flags(std::string_view options) {
   auto flags = std::regex::ECMAScript;
   for (const char c : options) {
     if (c == 'i') flags |= std::regex::icase;
     else if (c == 'm') flags |= std::regex::multiline;
-    // 's' and 'x' silently ignored.
+    // 's' handled via pattern rewrite (see rewrite_dotall_pattern); 'x' ignored.
   }
   return flags;
+}
+
+// If `s` (dotall) is set, rewrite each unescaped `.` outside a character
+// class to `[\s\S]`. We track escape state and char-class depth so we don't
+// touch `\.` or `.` inside `[...]`. Returns the original pattern when 's'
+// isn't requested — avoids the allocation in the hot path.
+std::string rewrite_dotall_pattern(std::string_view pattern,
+                                   std::string_view options) {
+  bool dotall = false;
+  for (const char c : options) {
+    if (c == 's') { dotall = true; break; }
+  }
+  if (!dotall) return std::string(pattern);
+
+  std::string out;
+  out.reserve(pattern.size() + 8);
+  bool in_class = false;
+  for (std::size_t i = 0; i < pattern.size(); ++i) {
+    const char c = pattern[i];
+    if (c == '\\' && i + 1 < pattern.size()) {
+      out.push_back(c);
+      out.push_back(pattern[i + 1]);
+      ++i;
+      continue;
+    }
+    if (!in_class && c == '[') { in_class = true; out.push_back(c); continue; }
+    if (in_class && c == ']')  { in_class = false; out.push_back(c); continue; }
+    if (!in_class && c == '.') { out += "[\\s\\S]"; continue; }
+    out.push_back(c);
+  }
+  return out;
 }
 
 bool regex_match_doc_string(std::string_view pattern, std::string_view options,
@@ -98,7 +152,8 @@ bool regex_match_doc_string(std::string_view pattern, std::string_view options,
   std::uint32_t dl = 0;
   const char* ds = bson_iter_utf8(&doc_val, &dl);
   try {
-    std::regex re(pattern.data(), pattern.size(), regex_flags(options));
+    const std::string effective = rewrite_dotall_pattern(pattern, options);
+    std::regex re(effective.data(), effective.size(), regex_flags(options));
     // MQL regex is partial-match (regex_search), not anchored full-match.
     return std::regex_search(ds, ds + dl, re);
   } catch (const std::regex_error&) {
@@ -139,11 +194,31 @@ bool eval_exists(bson_iter_t op_val, bool present) {
   return want ? present : !present;
 }
 
+// Mongo equality on arrays is element-aware: `{tags: 'a'}` matches both
+// `{tags: 'a'}` and `{tags: ['a','b']}`. Compare directly first (covers
+// whole-array equality if the filter is also an array), then walk array
+// elements for scalar-in-array matching.
+bool equals_or_contains(bson_iter_t filter_val, bson_iter_t doc_val) {
+  if (value_equal(filter_val, doc_val)) return true;
+  if (bson_iter_type(&doc_val) != BSON_TYPE_ARRAY) return false;
+  std::uint32_t alen = 0;
+  const std::uint8_t* adata = nullptr;
+  bson_iter_array(&doc_val, &alen, &adata);
+  bson_t arr;
+  if (!bson_init_static(&arr, adata, alen)) return false;
+  bson_iter_t elem;
+  if (!bson_iter_init(&elem, &arr)) return false;
+  while (bson_iter_next(&elem)) {
+    if (value_equal(filter_val, elem)) return true;
+  }
+  return false;
+}
+
 bool eval_operator(std::string_view op, bson_iter_t op_val,
                    std::string_view sibling_options, bool present,
                    bson_iter_t doc_val) {
-  if (op == "$eq") return present && value_equal(op_val, doc_val);
-  if (op == "$ne") return !present || !value_equal(op_val, doc_val);
+  if (op == "$eq") return present && equals_or_contains(op_val, doc_val);
+  if (op == "$ne") return !present || !equals_or_contains(op_val, doc_val);
   if (op == "$gt" || op == "$gte" || op == "$lt" || op == "$lte") {
     if (!present) return false;
     auto cmp = value_compare(doc_val, op_val);
@@ -209,7 +284,7 @@ bool eval_field(bson_iter_t field_filter, bson::BsonView doc) {
     return true;
   }
 
-  // Literal BSON regex value `{field: /pat/i}` — sugar for $regex.
+  // Literal BSON regex value `{field: /pat/i}` - sugar for $regex.
   if (bson_iter_type(&field_filter) == BSON_TYPE_REGEX) {
     if (!present) return false;
     const char* opts = nullptr;
@@ -219,11 +294,11 @@ bool eval_field(bson_iter_t field_filter, bson::BsonView doc) {
   }
 
   if (!present) return false;
-  return value_equal(field_filter, dit);
+  return equals_or_contains(field_filter, dit);
 }
 
 // ---------------------------------------------------------------------------
-// Top-level operators ($and / $or)
+// Top-level operators ($and / $or / $expr)
 // ---------------------------------------------------------------------------
 
 bool eval_logical(std::string_view op, bson_iter_t op_val,
@@ -253,14 +328,45 @@ bool eval_logical(std::string_view op, bson_iter_t op_val,
   return seen && result;
 }
 
+bool is_truthy_expr_value(const std::vector<std::uint8_t>& wrapped) {
+  if (wrapped.empty()) return false;
+  bson_t holder;
+  bson_iter_t iter;
+  if (!unwrap_iter(wrapped, &holder, &iter)) return false;
+  switch (bson_iter_type(&iter)) {
+    case BSON_TYPE_NULL:
+    case BSON_TYPE_UNDEFINED:
+      return false;
+    case BSON_TYPE_BOOL:
+      return bson_iter_bool(&iter);
+    case BSON_TYPE_INT32:
+      return bson_iter_int32(&iter) != 0;
+    case BSON_TYPE_INT64:
+      return bson_iter_int64(&iter) != 0;
+    case BSON_TYPE_DOUBLE:
+      return bson_iter_double(&iter) != 0.0;
+    default:
+      return true;
+  }
+}
+
 bool eval_top_operator(std::string_view op, bson_iter_t op_val,
                        bson::BsonView doc) {
   if (op == "$and" || op == "$or") return eval_logical(op, op_val, doc);
-  // $nor / $not / $expr / etc. — out of scope for C3.
+  if (op == "$expr") {
+    bson_t source_doc;
+    if (!bson_init_static(&source_doc, doc.data(), doc.size())) return false;
+    auto evaluated = evaluate_expression(source_doc, wrap_iter_value(op_val));
+    return evaluated && is_truthy_expr_value(*evaluated);
+  }
+  // $nor / $not / etc. remain out of scope.
   return false;
 }
 
 bool match_doc(bson::BsonView doc, std::span<const std::uint8_t> filter) {
+  FilterDepthGuard depth_guard;
+  if (depth_guard.exceeded) return false;
+
   bson_t f;
   if (filter.size() < 5 || !bson_init_static(&f, filter.data(), filter.size())) {
     return filter.size() == 5;

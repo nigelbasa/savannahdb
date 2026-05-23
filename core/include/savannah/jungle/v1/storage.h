@@ -6,10 +6,12 @@
 
 #include "savannah/bson/document.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 #include <string_view>
 #include <string>
 #include <vector>
@@ -20,6 +22,9 @@ namespace savannah::jungle::storage::v1 {
 
 struct InsertResult {
   std::size_t inserted_count{0};
+  int err_code{0};
+  std::string err_name;
+  std::string err_message;
 };
 
 struct UpdateBatchResult {
@@ -36,6 +41,16 @@ struct UpdateBatchResult {
 
 struct EraseResult {
   std::size_t deleted{0};
+  int err_code{0};
+  std::string err_name;
+  std::string err_message;
+};
+
+struct IndexMutationResult {
+  bool changed{false};
+  int err_code{0};
+  std::string err_name;
+  std::string err_message;
 };
 
 class Iterator {
@@ -77,6 +92,28 @@ class Collection {
   // Index registry — every backend exposes one, even if (initially) empty.
   // The binding uses this to handle createIndex/dropIndex/listIndexes
   // without downcasting to a concrete backend.
+  //
+  // For compound indexes, pass multiple field paths in declaration order;
+  // single-field indexes pass a one-element list. Backends that don't
+  // implement compound natively can validate field_paths.size() == 1 and
+  // return an error.
+  struct CreateIndexOptions {
+    bool unique{false};
+  };
+
+  virtual IndexMutationResult create_index(
+      std::string_view name,
+      std::span<const std::string> field_paths,
+      CreateIndexOptions options = {}) = 0;
+  // Single-field convenience overload — wraps the path and delegates.
+  IndexMutationResult create_index(
+      std::string_view name, std::string_view field_path,
+      CreateIndexOptions options = {}) {
+    std::string owned(field_path);
+    std::array<std::string, 1> paths{std::move(owned)};
+    return create_index(name, std::span<const std::string>(paths), options);
+  }
+  virtual IndexMutationResult drop_index(std::string_view name) = 0;
   virtual savannah::index::IndexManager& indexes() = 0;
 
   // Backend-owned backfill keeps the binding decoupled from slot/layout

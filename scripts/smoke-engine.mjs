@@ -583,6 +583,31 @@ assert.throws(
     'missing field sorts last descending',
   );
 
+  // Mixed types use Mongo's BSON sort order, and missing == null for sort.
+  engine.insert('zoo', 'sorted_mixed', [
+    ser({ _id: 1, label: 'missing' }),
+    ser({ _id: 2, label: 'null', v: null }),
+    ser({ _id: 3, label: 'number', v: 5 }),
+    ser({ _id: 4, label: 'string', v: 'zzz' }),
+    ser({ _id: 5, label: 'bool', v: true }),
+  ]);
+  const mixedAsc = engine
+    .find('zoo', 'sorted_mixed', ser({}), HUGE, ser({ v: 1 }), 0, 0, EMPTY)
+    .batch.map((b) => BSON.deserialize(b));
+  assert.deepEqual(
+    mixedAsc.map((d) => d._id),
+    [1, 2, 3, 4, 5],
+    'ascending mixed-type sort must follow BSON type order with missing == null',
+  );
+  const mixedDesc = engine
+    .find('zoo', 'sorted_mixed', ser({}), HUGE, ser({ v: -1 }), 0, 0, EMPTY)
+    .batch.map((b) => BSON.deserialize(b));
+  assert.deepEqual(
+    mixedDesc.map((d) => d._id),
+    [5, 4, 3, 1, 2],
+    'descending mixed-type sort must invert BSON type order and keep nullish ties stable',
+  );
+
   // Dot-path sort key.
   engine.insert('zoo', 'nested', [ser({ _id: 100, address: { city: 'Z' } })]);
   const byCity = engine
@@ -676,8 +701,9 @@ assert.throws(
 
 // ---- Slice F4: index create / drop / list ----------------------------
 {
-  // Backfill counts live scalar values only; missing fields and arrays are
-  // skipped until multikey lands alongside filter parity.
+  // Backfill now indexes missing fields into the shared nullish bucket so
+  // sparse-field index sorts can keep parity with scan sort. Arrays are
+  // indexed as multikey entries.
   engine.insert('zoo', 'idx_backfill', [
     ser({ _id: 1, species: 'lion' }),
     ser({ _id: 2, species: 'zebra' }),
@@ -689,7 +715,11 @@ assert.throws(
   let info = getIndexInfo('zoo', 'idx_backfill', 'species_1');
   assert.ok(info, 'created index must appear in listIndexes');
   assert.equal(info.fieldPath, 'species');
-  assert.equal(info.entries, 2, 'backfill should index only live scalar values');
+  assert.equal(
+    info.entries,
+    4,
+    'backfill should index scalars, missing-field nullish entries, and multikey elements',
+  );
 
   // Creating the index first means later inserts should auto-maintain it.
   r = engine.createIndex('zoo', 'idx_insert', 'species_1', 'species');
@@ -700,7 +730,7 @@ assert.throws(
     ser({ _id: 3, species: ['skip-me'] }),
   ]);
   info = getIndexInfo('zoo', 'idx_insert', 'species_1');
-  assert.equal(info.entries, 2, 'insert should auto-add scalar keys');
+  assert.equal(info.entries, 3, 'insert should auto-add scalar and multikey keys');
 
   // Update is erase old + insert new. Present->array must remove the old key,
   // and array->scalar must re-add it through the same path.
@@ -719,7 +749,7 @@ assert.throws(
   );
   assert.equal(updateRes.modified, 1);
   info = getIndexInfo('zoo', 'idx_update', 'species_1');
-  assert.equal(info.entries, 0, 'update should remove the old scalar key');
+  assert.equal(info.entries, 1, 'update should replace the old scalar key with multikey element');
   updateRes = engine.update(
     'zoo',
     'idx_update',
@@ -746,14 +776,14 @@ assert.throws(
   info = getIndexInfo('zoo', 'idx_erase', 'species_1');
   assert.equal(info.entries, 1, 'erase should remove the deleted slot');
 
-  // Dropping the index must remove it from listIndexes entirely.
+  // Dropping the index must remove it from listIndexes entirely (excluding implicit _id_ index).
   r = engine.createIndex('zoo', 'idx_drop', 'species_1', 'species');
   assert.equal(r.created, true);
   engine.insert('zoo', 'idx_drop', [ser({ _id: 1, species: 'lynx' })]);
-  assert.equal(engine.listIndexes('zoo', 'idx_drop').length, 1);
+  assert.equal(engine.listIndexes('zoo', 'idx_drop').length, 2); // implicit _id_ + species_1
   const dropRes = engine.dropIndex('zoo', 'idx_drop', 'species_1');
   assert.equal(dropRes.dropped, true);
-  assert.equal(engine.listIndexes('zoo', 'idx_drop').length, 0);
+  assert.equal(engine.listIndexes('zoo', 'idx_drop').length, 1); // only implicit _id_ remains
 }
 
 // ---- Slice F5: planner equality lookup -------------------------------

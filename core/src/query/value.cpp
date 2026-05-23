@@ -40,6 +40,47 @@ int numeric_compare(bson_iter_t a, bson_iter_t b) {
 
 }  // namespace
 
+int sort_type_rank(bson_type_t t) {
+  switch (t) {
+    case BSON_TYPE_MINKEY:
+      return 1;
+    case BSON_TYPE_NULL:
+    case BSON_TYPE_UNDEFINED:
+      return 2;
+    case BSON_TYPE_INT32:
+    case BSON_TYPE_INT64:
+    case BSON_TYPE_DOUBLE:
+      return 3;
+    case BSON_TYPE_SYMBOL:
+    case BSON_TYPE_UTF8:
+      return 4;
+    case BSON_TYPE_DOCUMENT:
+      return 5;
+    case BSON_TYPE_ARRAY:
+      return 6;
+    case BSON_TYPE_BINARY:
+      return 7;
+    case BSON_TYPE_OID:
+      return 8;
+    case BSON_TYPE_BOOL:
+      return 9;
+    case BSON_TYPE_DATE_TIME:
+      return 10;
+    case BSON_TYPE_TIMESTAMP:
+      return 11;
+    case BSON_TYPE_REGEX:
+      return 12;
+    case BSON_TYPE_CODE:
+      return 13;
+    case BSON_TYPE_CODEWSCOPE:
+      return 14;
+    case BSON_TYPE_MAXKEY:
+      return 15;
+    default:
+      return 100;
+  }
+}
+
 bool value_equal(bson_iter_t a, bson_iter_t b) {
   const bson_type_t ta = bson_iter_type(&a);
   const bson_type_t tb = bson_iter_type(&b);

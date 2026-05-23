@@ -29,10 +29,23 @@ namespace savannah::jungle::query::v1 {
 
 namespace {
 
+using ArrayIndexValue =
+    std::optional<std::pair<std::string, std::optional<std::int64_t>>>;
+
+void append_array_index(bson_t* out, const ArrayIndexValue& array_index) {
+  if (!array_index) return;
+  if (array_index->second) {
+    bson_append_int64(out, array_index->first.c_str(), -1,
+                      *array_index->second);
+    return;
+  }
+  bson_append_null(out, array_index->first.c_str(), -1);
+}
+
 std::vector<std::uint8_t> clone_doc_with_replaced_field(
     std::span<const std::uint8_t> source_bytes, std::string_view field_name,
     const std::vector<std::uint8_t>& wrapped_value,
-    std::optional<std::pair<std::string, std::int64_t>> array_index = std::nullopt) {
+    ArrayIndexValue array_index = std::nullopt) {
   bson_t source;
   bson_init_static(&source, source_bytes.data(), source_bytes.size());
 
@@ -50,9 +63,58 @@ std::vector<std::uint8_t> clone_doc_with_replaced_field(
   }
 
   append_wrapped_value(&out, field_name, wrapped_value);
-  if (array_index) {
-    bson_append_int64(&out, array_index->first.c_str(), -1, array_index->second);
+  append_array_index(&out, array_index);
+
+  auto bytes = bytes_from_bson(out);
+  bson_destroy(&out);
+  return bytes;
+}
+
+std::vector<std::uint8_t> clone_doc_without_field(
+    std::span<const std::uint8_t> source_bytes, std::string_view field_name,
+    ArrayIndexValue array_index = std::nullopt) {
+  bson_t source;
+  bson_init_static(&source, source_bytes.data(), source_bytes.size());
+
+  bson_t out;
+  bson_init(&out);
+  bson_iter_t it;
+  bson_iter_init(&it, &source);
+  while (bson_iter_next(&it)) {
+    const char* key = bson_iter_key(&it);
+    if (!key || std::string_view(key) == field_name ||
+        (array_index && std::string_view(key) == array_index->first)) {
+      continue;
+    }
+    bson_append_iter(&out, key, -1, &it);
   }
+
+  append_array_index(&out, array_index);
+
+  auto bytes = bytes_from_bson(out);
+  bson_destroy(&out);
+  return bytes;
+}
+
+std::vector<std::uint8_t> clone_doc_with_array_index(
+    std::span<const std::uint8_t> source_bytes,
+    ArrayIndexValue array_index) {
+  bson_t source;
+  bson_init_static(&source, source_bytes.data(), source_bytes.size());
+
+  bson_t out;
+  bson_init(&out);
+  bson_iter_t it;
+  bson_iter_init(&it, &source);
+  while (bson_iter_next(&it)) {
+    const char* key = bson_iter_key(&it);
+    if (!key || (array_index && std::string_view(key) == array_index->first)) {
+      continue;
+    }
+    bson_append_iter(&out, key, -1, &it);
+  }
+
+  append_array_index(&out, array_index);
 
   auto bytes = bytes_from_bson(out);
   bson_destroy(&out);
@@ -103,7 +165,15 @@ std::vector<std::vector<std::uint8_t>> apply_unwind_stage(
     bson_init_static(&source, doc.data(), doc.size());
     bson_iter_t value_it;
     if (!jungle::query::v1::resolve_path(source, path.c_str(), &value_it)) {
-      if (preserve_null_empty) out.push_back(doc);
+      if (preserve_null_empty) {
+        ArrayIndexValue idx =
+            include_array_index
+                ? std::make_optional(std::make_pair(*include_array_index,
+                                                    std::optional<std::int64_t>{}))
+                : std::nullopt;
+        if (idx) out.push_back(clone_doc_with_array_index(doc, idx));
+        else out.push_back(doc);
+      }
       continue;
     }
 
@@ -111,7 +181,8 @@ std::vector<std::vector<std::uint8_t>> apply_unwind_stage(
       if (include_array_index) {
         out.push_back(clone_doc_with_replaced_field(
             doc, path, wrap_iter_value(value_it),
-            std::make_optional(std::make_pair(*include_array_index, static_cast<std::int64_t>(0)))));
+            std::make_optional(std::make_pair(*include_array_index,
+                                              std::optional<std::int64_t>{}))));
       } else {
         out.push_back(doc);
       }
@@ -130,21 +201,22 @@ std::vector<std::vector<std::uint8_t>> apply_unwind_stage(
     while (bson_iter_next(&array_it)) {
       emitted = true;
       auto replacement = wrap_iter_value(array_it);
-      std::optional<std::pair<std::string, std::int64_t>> idx =
+      ArrayIndexValue idx =
           include_array_index
               ? std::make_optional(std::make_pair(*include_array_index,
-                                                  static_cast<std::int64_t>(index)))
+                                                  std::make_optional(
+                                                      static_cast<std::int64_t>(index))))
               : std::nullopt;
       out.push_back(clone_doc_with_replaced_field(doc, path, replacement, idx));
       ++index;
     }
     if (!emitted && preserve_null_empty) {
-      std::optional<std::pair<std::string, std::int64_t>> idx =
+      ArrayIndexValue idx =
           include_array_index
-              ? std::make_optional(std::make_pair(*include_array_index, static_cast<std::int64_t>(-1)))
+              ? std::make_optional(std::make_pair(*include_array_index,
+                                                  std::optional<std::int64_t>{}))
               : std::nullopt;
-      out.push_back(clone_doc_with_replaced_field(
-          doc, path, wrap_iter_value(value_it), idx));
+      out.push_back(clone_doc_without_field(doc, path, idx));
     }
   }
   return out;
