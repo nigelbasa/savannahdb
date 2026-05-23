@@ -91,7 +91,7 @@ std::span<std::uint8_t> Arena::copy(std::span<const std::uint8_t> src) {
 jungle::storage::v1::InsertResult MemoryCollection::insert(
     std::span<const bson::BsonView> docs) {
   slots_.reserve(slots_.size() + docs.size());
-  jungle::storage::v1::InsertResult result{0};
+  jungle::storage::v1::InsertResult result{};
   for (const auto& d : docs) {
     auto owned = arena_.copy(d.span());
     bson::BsonView view(
@@ -314,18 +314,22 @@ jungle::storage::v1::IndexMutationResult MemoryCollection::create_index(
     std::string_view name, std::span<const std::string> field_paths,
     jungle::storage::v1::Collection::CreateIndexOptions options) {
   if (field_paths.empty()) {
-    return {
-        .changed = false,
-        .err_code = 197,  // InvalidIndexSpecificationOption
-        .err_name = "InvalidIndexSpecification",
-        .err_message = "createIndex requires at least one field path",
-    };
+    jungle::storage::v1::IndexMutationResult res;
+    res.changed = false;
+    res.err_code = 197;  // InvalidIndexSpecificationOption
+    res.err_name = "InvalidIndexSpecification";
+    res.err_message = "createIndex requires at least one field path";
+    return res;
   }
   std::vector<std::string> paths(field_paths.begin(), field_paths.end());
   index::IndexOptions idx_opts;
   idx_opts.unique = options.unique;
   const bool created = indexes_.create(std::string(name), std::move(paths), idx_opts);
-  if (!created) return {.changed = false};
+  if (!created) {
+    jungle::storage::v1::IndexMutationResult res;
+    res.changed = false;
+    return res;
+  }
 
   // For unique indexes on existing data, scan live slots first to detect any
   // pre-existing duplicate. If found, roll back the index registration so the
@@ -338,24 +342,28 @@ jungle::storage::v1::IndexMutationResult MemoryCollection::create_index(
           indexes_.would_violate_unique(slot.record_id, slot.view);
       if (violator == std::string(name)) {
         indexes_.drop(name);
-        return {
-            .changed = false,
-            .err_code = 11000,  // DuplicateKey
-            .err_name = "DuplicateKey",
-            .err_message = "existing data violates uniqueness for index " +
-                           std::string(name),
-        };
+        jungle::storage::v1::IndexMutationResult res;
+        res.changed = false;
+        res.err_code = 11000;  // DuplicateKey
+        res.err_name = "DuplicateKey";
+        res.err_message = "existing data violates uniqueness for index " +
+                       std::string(name);
+        return res;
       }
       // Insert into the index incrementally so subsequent docs see prior
       // keys for the dup check. backfill_index would do this in one pass
       // without checking; we need the per-doc check.
       indexes_.on_insert(slot.record_id, slot.view);
     }
-    return {.changed = true};
+    jungle::storage::v1::IndexMutationResult res;
+    res.changed = true;
+    return res;
   }
 
   backfill_index(name);
-  return {.changed = true};
+  jungle::storage::v1::IndexMutationResult res;
+  res.changed = true;
+  return res;
 }
 
 jungle::storage::v1::IndexMutationResult MemoryCollection::drop_index(
@@ -365,14 +373,16 @@ jungle::storage::v1::IndexMutationResult MemoryCollection::drop_index(
     // (rather than silently no-op'ing) is what drivers expect so they can
     // surface it correctly. Suppressed when the implicit index is disabled
     // via env — in that case `_id_` isn't ours to protect.
-    return {
-        .changed = false,
-        .err_code = 72,  // InvalidIndexSpecificationOption — close enough
-        .err_name = "InvalidIndexSpecification",
-        .err_message = "cannot drop _id index",
-    };
+    jungle::storage::v1::IndexMutationResult res;
+    res.changed = false;
+    res.err_code = 72;  // InvalidIndexSpecificationOption — close enough
+    res.err_name = "InvalidIndexSpecification";
+    res.err_message = "cannot drop _id index";
+    return res;
   }
-  return {.changed = indexes_.drop(name)};
+  jungle::storage::v1::IndexMutationResult res;
+  res.changed = indexes_.drop(name);
+  return res;
 }
 
 bool MemoryCollection::backfill_index(std::string_view name) {

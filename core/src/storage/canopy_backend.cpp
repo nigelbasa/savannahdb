@@ -3,11 +3,16 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
-#include <io.h>
 #include <stdexcept>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#include <io.h>
 #include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace savannah::storage {
 
@@ -97,13 +102,40 @@ std::string read_string(const std::uint8_t* data, std::size_t size,
   return std::string(bytes.begin(), bytes.end());
 }
 
+FILE* cross_fopen(const char* path, const char* mode) {
+#ifdef _WIN32
+  FILE* file = nullptr;
+  if (fopen_s(&file, path, mode) != 0) return nullptr;
+  return file;
+#else
+  return std::fopen(path, mode);
+#endif
+}
+
+bool cross_fsync(FILE* file) {
+  if (std::fflush(file) != 0) return false;
+#ifdef _WIN32
+  return _commit(_fileno(file)) == 0;
+#else
+  return fsync(fileno(file)) == 0;
+#endif
+}
+
 void atomic_replace_file(const std::filesystem::path& source,
                          const std::filesystem::path& target) {
+#ifdef _WIN32
   if (!MoveFileExA(
           source.string().c_str(), target.string().c_str(),
           MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
     throw std::runtime_error("Canopy failed to atomically replace file");
   }
+#else
+  std::error_code ec;
+  std::filesystem::rename(source, target, ec);
+  if (ec) {
+    throw std::runtime_error("Canopy failed to atomically replace file: " + ec.message());
+  }
+#endif
 }
 
 void ensure_log_header(std::filesystem::path path) {
@@ -111,26 +143,26 @@ void ensure_log_header(std::filesystem::path path) {
   if (std::filesystem::exists(path) && std::filesystem::file_size(path) > 0) {
     return;
   }
-  FILE* file = nullptr;
-  if (fopen_s(&file, path.string().c_str(), "wb") != 0 || !file) {
+  FILE* file = cross_fopen(path.string().c_str(), "wb");
+  if (!file) {
     throw std::runtime_error("Canopy failed to create log file");
   }
   const bool ok =
       std::fwrite(kLogHeader, 1, sizeof(kLogHeader), file) == sizeof(kLogHeader) &&
-      std::fflush(file) == 0 && _commit(_fileno(file)) == 0;
+      cross_fsync(file);
   std::fclose(file);
   if (!ok) throw std::runtime_error("Canopy failed to initialize log header");
 }
 
 void reset_log(std::filesystem::path path) {
   const auto tmp = path.string() + ".tmp";
-  FILE* file = nullptr;
-  if (fopen_s(&file, tmp.c_str(), "wb") != 0 || !file) {
+  FILE* file = cross_fopen(tmp.c_str(), "wb");
+  if (!file) {
     throw std::runtime_error("Canopy failed to reset log");
   }
   const bool ok =
       std::fwrite(kLogHeader, 1, sizeof(kLogHeader), file) == sizeof(kLogHeader) &&
-      std::fflush(file) == 0 && _commit(_fileno(file)) == 0;
+      cross_fsync(file);
   std::fclose(file);
   if (!ok) throw std::runtime_error("Canopy failed while truncating log");
   atomic_replace_file(tmp, path);
@@ -140,8 +172,8 @@ void append_record(std::filesystem::path path, std::uint64_t seq, CanopyOpCode o
                    std::span<const std::uint8_t> payload) {
   ensure_log_header(path);
 
-  FILE* file = nullptr;
-  if (fopen_s(&file, path.string().c_str(), "ab") != 0 || !file) {
+  FILE* file = cross_fopen(path.string().c_str(), "ab");
+  if (!file) {
     throw std::runtime_error("Canopy failed to open log for append");
   }
 
@@ -154,7 +186,7 @@ void append_record(std::filesystem::path path, std::uint64_t seq, CanopyOpCode o
       std::fwrite(&opcode, sizeof(opcode), 1, file) == 1 &&
       (payload.empty() ||
        std::fwrite(payload.data(), 1, payload.size(), file) == payload.size()) &&
-      std::fflush(file) == 0 && _commit(_fileno(file)) == 0;
+      cross_fsync(file);
   std::fclose(file);
   if (!ok) {
     throw std::runtime_error("Canopy failed to durably append log record");
@@ -596,13 +628,13 @@ void CanopyBackend::CollectionProxy::checkpoint() {
   const auto tmp_path = state_path().string() + ".tmp";
   std::filesystem::create_directories(state_path().parent_path());
   {
-    FILE* file = nullptr;
-    if (fopen_s(&file, tmp_path.c_str(), "wb") != 0 || !file) {
+    FILE* file = cross_fopen(tmp_path.c_str(), "wb");
+    if (!file) {
       throw std::runtime_error("Canopy failed to open state tmp file");
     }
     const bool ok =
         std::fwrite(blob.data(), 1, blob.size(), file) == blob.size() &&
-        std::fflush(file) == 0 && _commit(_fileno(file)) == 0;
+        cross_fsync(file);
     std::fclose(file);
     if (!ok) throw std::runtime_error("Canopy failed to write state snapshot");
   }

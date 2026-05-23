@@ -13,6 +13,7 @@ namespace savannah {
 namespace {
 
 std::string env_or_empty(const char* key) {
+#ifdef _WIN32
   char* value = nullptr;
   std::size_t len = 0;
   if (_dupenv_s(&value, &len, key) != 0 || !value) {
@@ -21,6 +22,10 @@ std::string env_or_empty(const char* key) {
   std::string out(value, len > 0 ? len - 1 : 0);
   std::free(value);
   return out;
+#else
+  const char* val = std::getenv(key);
+  return val ? std::string(val) : std::string{};
+#endif
 }
 
 }  // namespace

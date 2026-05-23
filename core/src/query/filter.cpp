@@ -109,7 +109,7 @@ std::regex_constants::syntax_option_type regex_flags(std::string_view options) {
   auto flags = std::regex::ECMAScript;
   for (const char c : options) {
     if (c == 'i') flags |= std::regex::icase;
-    else if (c == 'm') flags |= std::regex::multiline;
+    // 'm' (multiline): not supported natively by std::regex. Silently ignored.
     // 's' handled via pattern rewrite (see rewrite_dotall_pattern); 'x' ignored.
   }
   return flags;
