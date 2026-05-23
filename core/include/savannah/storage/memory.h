@@ -54,7 +54,7 @@ class MemoryCollection final : public jungle::storage::v1::Collection {
   jungle::storage::v1::IndexMutationResult create_index(
       std::string_view name,
       std::span<const std::string> field_paths,
-      jungle::storage::v1::Collection::CreateIndexOptions options = {}) override;
+      jungle::storage::v1::CreateIndexOptions options = {}) override;
   using jungle::storage::v1::Collection::create_index;  // expose string overload
   jungle::storage::v1::IndexMutationResult drop_index(
       std::string_view name) override;

@@ -312,7 +312,7 @@ std::unique_ptr<jungle::storage::v1::Iterator> MemoryCollection::aggregate(
 
 jungle::storage::v1::IndexMutationResult MemoryCollection::create_index(
     std::string_view name, std::span<const std::string> field_paths,
-    jungle::storage::v1::Collection::CreateIndexOptions options) {
+    jungle::storage::v1::CreateIndexOptions options) {
   if (field_paths.empty()) {
     jungle::storage::v1::IndexMutationResult res;
     res.changed = false;

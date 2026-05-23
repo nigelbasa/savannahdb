@@ -53,6 +53,10 @@ struct IndexMutationResult {
   std::string err_message;
 };
 
+struct CreateIndexOptions {
+  bool unique{false};
+};
+
 class Iterator {
  public:
   virtual ~Iterator() = default;
@@ -97,19 +101,14 @@ class Collection {
   // single-field indexes pass a one-element list. Backends that don't
   // implement compound natively can validate field_paths.size() == 1 and
   // return an error.
-  struct CreateIndexOptions {
-    CreateIndexOptions() = default;
-    bool unique{false};
-  };
-
   virtual IndexMutationResult create_index(
       std::string_view name,
       std::span<const std::string> field_paths,
-      CreateIndexOptions options = CreateIndexOptions()) = 0;
+      CreateIndexOptions options = {}) = 0;
   // Single-field convenience overload — wraps the path and delegates.
   IndexMutationResult create_index(
       std::string_view name, std::string_view field_path,
-      CreateIndexOptions options = CreateIndexOptions()) {
+      CreateIndexOptions options = {}) {
     std::string owned(field_path);
     std::array<std::string, 1> paths{std::move(owned)};
     return create_index(name, std::span<const std::string>(paths), options);

@@ -414,7 +414,7 @@ jungle::storage::v1::EraseResult CanopyBackend::CollectionProxy::erase(
 
 jungle::storage::v1::IndexMutationResult CanopyBackend::CollectionProxy::create_index(
     std::string_view name, std::span<const std::string> field_paths,
-    jungle::storage::v1::Collection::CreateIndexOptions options) {
+    jungle::storage::v1::CreateIndexOptions options) {
   std::lock_guard<std::mutex> lock(write_mutex_);
   auto result = inner_.create_index(name, field_paths, options);
   if (result.err_code != 0 || !result.changed) return result;
@@ -592,7 +592,7 @@ void CanopyBackend::CollectionProxy::apply_create_index_payload(
     throw std::runtime_error("Canopy create-index payload truncated (missing flags)");
   }
   const std::uint8_t flags = payload[offset++];
-  jungle::storage::v1::Collection::CreateIndexOptions options;
+  jungle::storage::v1::CreateIndexOptions options;
   options.unique = (flags & kIndexFlagUnique) != 0;
   inner_.create_index(name, std::span<const std::string>(paths), options);
 }
