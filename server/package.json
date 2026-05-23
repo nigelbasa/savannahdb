@@ -23,6 +23,7 @@
     "bin/",
     "prebuilds/",
     "README.md",
+    "docs.md",
     "LICENSE"
   ],
   "scripts": {

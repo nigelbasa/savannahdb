@@ -64,7 +64,7 @@ console.log(tallAnimals);
 
 2. **Connect using Node.js SDK**:
    ```javascript
-   import { SavannahDB } from './server/dist/sdk/index.js';
+   import { SavannahDB } from '@nigelbasa/savannahdb';
 
    const db = new SavannahDB({
      url: 'http://localhost:27018'
