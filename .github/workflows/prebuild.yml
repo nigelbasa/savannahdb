@@ -58,7 +58,7 @@ jobs:
         run: npx cmake-js compile --CDCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake --CDVCPKG_TARGET_TRIPLET=arm64-osx
 
       - name: Stage prebuild
-        run: node scripts/prebuild.mjs
+        run: node scripts/prebuild.mjs ${{ matrix.arch }}
 
       - uses: actions/upload-artifact@v4
         with:

@@ -40,7 +40,7 @@ if (!existsSync(sourceAddon)) {
 // directory naming. Same triplet convention used by prebuild-install,
 // prebuildify, and the rest of the ecosystem.
 const platform = process.platform;
-const arch = process.arch;
+const arch = process.argv[2] || process.arch;
 const target = resolve(repoRoot, 'server', 'prebuilds', `${platform}-${arch}`);
 mkdirSync(target, { recursive: true });
 
