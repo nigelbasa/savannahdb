@@ -175,7 +175,7 @@ export class Collection {
       if (res.err) {
         throw new Error(`${res.err.name}: ${res.err.message} (code ${res.err.code})`);
       }
-      const upsertedIds = res.upsertedIds.map(buf => BSON.deserialize(Buffer.from(buf))._id);
+      const upsertedIds = res.upsertedIds.map(buf => BSON.deserialize(buf)._id);
       return {
         matched: res.matched,
         modified: res.modified,
@@ -209,7 +209,7 @@ export class Collection {
       if (res.err) {
         throw new Error(`${res.err.name}: ${res.err.message} (code ${res.err.code})`);
       }
-      const upsertedIds = res.upsertedIds.map(buf => BSON.deserialize(Buffer.from(buf))._id);
+      const upsertedIds = res.upsertedIds.map(buf => BSON.deserialize(buf)._id);
       return {
         matched: res.matched,
         modified: res.modified,
@@ -446,7 +446,7 @@ export class Cursor {
       }
       this.cursorIdBig = res.cursorId;
       this.cursorIdStr = res.cursorId.toString();
-      this.buffer = res.batch.map(buf => BSON.deserialize(Buffer.from(buf)));
+      this.buffer = res.batch.map(buf => BSON.deserialize(buf));
     } else {
       // Client mode
       const payload: Record<string, any> = {};
@@ -497,7 +497,7 @@ export class Cursor {
       const res = getEngine().getMore(this.cursorIdBig, this.dbName, this.collName, this.batchSizeVal);
       this.cursorIdBig = res.cursorId;
       this.cursorIdStr = res.cursorId.toString();
-      this.buffer = res.batch.map(buf => BSON.deserialize(Buffer.from(buf)));
+      this.buffer = res.batch.map(buf => BSON.deserialize(buf));
     } else {
       // Client mode
       const url = `${this.db.getUrl()}/api/v1/cursors/${this.cursorIdStr}/get-more`;
