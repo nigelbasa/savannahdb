@@ -103,6 +103,17 @@ jobs:
           done
           ls -R server/prebuilds
 
+      # npm Trusted Publishing uses the OIDC token GH Actions injects when
+      # id-token: write is granted (see `permissions:` above). It requires
+      # npm >= 11.5.1, but Node 20 ships npm 10 — upgrade the global npm
+      # before publishing.
+      - name: Upgrade npm for OIDC trusted publishing
+        run: npm install -g npm@latest
+
+      # No NODE_AUTH_TOKEN: with the package configured as a Trusted Publisher
+      # on npmjs.com (linked to this repo + workflow), npm authenticates via
+      # the OIDC token automatically. Passing a stale token here would force
+      # the token flow and bypass OIDC.
       - name: Publish to npm
         run: |
           version=$(node -p "require('./server/package.json').version")
@@ -113,5 +124,3 @@ jobs:
           else
             npm publish --workspace @nigelbasa/savannahdb --provenance
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
