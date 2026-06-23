@@ -56,7 +56,20 @@ export interface EraseResult {
   err?: EngineError;
 }
 
+export interface ConfigureResult {
+  backend: 'memory' | 'canopy';
+  // false when the requested config already matched the live engine.
+  changed: boolean;
+}
+
 export interface EngineBindings {
+  // Select the storage backend explicitly. Must be passed across the native
+  // boundary (not via process.env): on Windows, runtime process.env writes go
+  // to the Win32 environment block and are invisible to the C runtime's
+  // getenv/_dupenv_s that the engine reads, so the canopy choice was silently
+  // dropped and the engine fell back to in-memory. A changed root rebuilds the
+  // engine, reloading durable state (and dropping any live cursors).
+  configure(backend: 'memory' | 'canopy', root?: string): ConfigureResult;
   insert(db: string, coll: string, docs: Uint8Array[]): InsertResult;
   createIndex(
     db: string,

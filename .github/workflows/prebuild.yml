@@ -104,6 +104,14 @@ jobs:
           ls -R server/prebuilds
 
       - name: Publish to npm
-        run: npm publish --workspace @nigelbasa/savannahdb --provenance
+        run: |
+          version=$(node -p "require('./server/package.json').version")
+          if [[ "$version" == *-* ]]; then
+            # Prereleases (e.g. 0.1.1-preview.1) publish under the `preview`
+            # dist-tag so `latest` is never overwritten by a preview build.
+            npm publish --workspace @nigelbasa/savannahdb --provenance --tag preview
+          else
+            npm publish --workspace @nigelbasa/savannahdb --provenance
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

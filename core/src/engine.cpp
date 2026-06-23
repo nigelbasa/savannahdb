@@ -28,19 +28,31 @@ std::string env_or_empty(const char* key) {
 #endif
 }
 
+std::filesystem::path default_canopy_root() {
+  return std::filesystem::current_path() / ".savannahdb" / "canopy";
+}
+
+std::unique_ptr<storage::IStorageBackend> make_backend(
+    bool canopy, const std::filesystem::path& root) {
+  if (canopy) {
+    return std::make_unique<storage::CanopyBackend>(
+        root.empty() ? default_canopy_root() : root);
+  }
+  return std::make_unique<storage::MemoryBackend>();
+}
+
 }  // namespace
 
 Engine::Engine() {
-  if (env_or_empty("SAVANNAH_STORAGE_BACKEND") == "canopy") {
-    const std::string root_env = env_or_empty("SAVANNAH_STORAGE_ROOT");
-    std::filesystem::path root = root_env.empty()
-        ? std::filesystem::current_path() / ".savannahdb" / "canopy"
-        : std::filesystem::path(root_env);
-    backend_ = std::make_unique<storage::CanopyBackend>(std::move(root));
-    return;
-  }
-  backend_ = std::make_unique<storage::MemoryBackend>();
+  const bool canopy = env_or_empty("SAVANNAH_STORAGE_BACKEND") == "canopy";
+  backend_ = make_backend(
+      canopy, std::filesystem::path(env_or_empty("SAVANNAH_STORAGE_ROOT")));
 }
+
+Engine::Engine(const StorageOptions& options) {
+  backend_ = make_backend(options.canopy, options.root);
+}
+
 Engine::~Engine() = default;
 
 }  // namespace savannah

@@ -6,6 +6,7 @@
 #include <bson/bson.h>
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <span>
 #include <string>
@@ -522,9 +523,41 @@ Napi::Value KillCursors(const Napi::CallbackInfo& info) {
   });
 }
 
+// configure(backend: string, root?: string)
+//   -> { backend: 'canopy' | 'memory', changed: boolean }
+// Selects the storage backend explicitly across the native boundary. This is
+// the reliable channel the SDK uses instead of process.env, which on Windows
+// does not propagate to the C runtime the engine reads at startup.
+Napi::Value Configure(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  return with_native_guard(env, [&]() -> Napi::Value {
+    if (info.Length() < 1 || !info[0].IsString()) {
+      Napi::TypeError::New(env, "configure(backend: string, root?: string)")
+          .ThrowAsJavaScriptException();
+      return env.Null();
+    }
+    const std::string backend = info[0].As<Napi::String>().Utf8Value();
+    savannah::StorageOptions options;
+    options.canopy = (backend == "canopy");
+    if (info.Length() >= 2 && info[1].IsString()) {
+      options.root =
+          std::filesystem::path(info[1].As<Napi::String>().Utf8Value());
+    }
+
+    const bool changed = configure_engine(options);
+
+    Napi::Object out = Napi::Object::New(env);
+    out.Set("backend",
+            Napi::String::New(env, options.canopy ? "canopy" : "memory"));
+    out.Set("changed", Napi::Boolean::New(env, changed));
+    return out;
+  });
+}
+
 }  // namespace
 
 void RegisterCollection(Napi::Env env, Napi::Object exports) {
+  exports.Set("configure", Napi::Function::New(env, Configure));
   exports.Set("insert", Napi::Function::New(env, Insert));
   exports.Set("createIndex", Napi::Function::New(env, CreateIndex));
   exports.Set("dropIndex", Napi::Function::New(env, DropIndex));

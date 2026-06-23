@@ -98,10 +98,14 @@ export class SavannahDB {
     } else {
       this.mode = 'embedded';
       if (config.storage) {
-        process.env.SAVANNAH_STORAGE_BACKEND = config.storage.backend;
-        if (config.storage.root) {
-          process.env.SAVANNAH_STORAGE_ROOT = config.storage.root;
-        }
+        // Pass storage selection across the native boundary explicitly rather
+        // than via process.env. On Windows, Node's runtime process.env writes
+        // land in the Win32 environment block, which the C runtime's
+        // getenv/_dupenv_s (read by the engine at startup) never sees — so the
+        // canopy choice was silently dropped and nothing persisted to disk.
+        // configure() also lets the storage root actually take effect, and
+        // re-applying a different root rebuilds the engine against it.
+        getEngine().configure(config.storage.backend, config.storage.root);
       }
     }
   }
