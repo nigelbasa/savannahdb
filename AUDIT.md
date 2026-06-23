@@ -1,34 +1,34 @@
 # SavannahDB Audit
 
-> Generated **2026-05-23T21:25:44.044Z** on Node v25.8.1 (win32-x64).
-> Diffed against **MongoDB 8.2.7**.
+> Generated **2026-06-23T17:57:49.913Z** on Node v25.8.1 (win32-x64).
+> Diffed against **MongoDB unavailable**.
 
 ## Accuracy vs MongoDB
 
-**20/20 cases match.** 0 diverged, 0 errored, 0 could not be checked.
+**0/20 cases match.** 0 diverged, 0 errored, 20 could not be checked.
 
 | Category | Operator(s) | Case | Verdict | SavannahDB | MongoDB |
 |---|---|---|---|---:|---:|
-| filter | `$eq` | `filter.eq` | match | 1.52 ms | 2.92 ms |
-| filter | `$ne` | `filter.ne` | match | 0.13 ms | 0.93 ms |
-| filter | `$gt $gte $lt $lte` | `filter.gt-gte-lt-lte` | match | 0.51 ms | 6.34 ms |
-| filter | `$in $nin` | `filter.in-nin` | match | 0.40 ms | 1.59 ms |
-| filter | `$exists` | `filter.exists` | match | 0.31 ms | 1.83 ms |
-| filter | `$regex` | `filter.regex` | match | 0.30 ms | 0.83 ms |
-| filter | `$and $or` | `filter.and-or` | match | 0.21 ms | 0.82 ms |
-| filter | `dot-path` | `filter.nested-path` | match | 0.12 ms | 0.76 ms |
-| expression | `$add $subtract $multiply $divide $mod` | `expr.arithmetic` | match | 0.48 ms | 1.61 ms |
-| expression | `$toLower $toUpper $concat $strLenCP` | `expr.string` | match | 0.23 ms | 1.99 ms |
-| expression | `$cond $switch $ifNull` | `expr.cond` | match | 0.24 ms | 1.44 ms |
-| expression | `$size $arrayElemAt $concatArrays $reverseArray $slice $in` | `expr.array` | match | 0.38 ms | 0.91 ms |
-| pipeline | `$match $sort $limit` | `pipeline.match-sort-limit` | match | 0.19 ms | 1.05 ms |
-| pipeline | `$group ($sum $avg $min $max $push $first $last)` | `pipeline.group` | match | 0.45 ms | 2.13 ms |
-| pipeline | `$lookup $unwind` | `pipeline.lookup-unwind` | match | 0.80 ms | 1.44 ms |
-| pipeline | `$count` | `pipeline.count` | match | 0.18 ms | 1.43 ms |
-| pipeline | `$replaceRoot` | `pipeline.replace-root` | match | 0.17 ms | 0.85 ms |
-| update | `$set $inc $unset` | `update.set-inc-unset` | match | 0.40 ms | 2.54 ms |
-| update | `upsert` | `update.upsert` | match | 0.23 ms | 1.55 ms |
-| update | `delete` | `update.delete` | match | 0.27 ms | 1.64 ms |
+| filter | `$eq` | `filter.eq` | _skipped_ | 2.10 ms | — |
+| filter | `$ne` | `filter.ne` | _skipped_ | 0.14 ms | — |
+| filter | `$gt $gte $lt $lte` | `filter.gt-gte-lt-lte` | _skipped_ | 0.44 ms | — |
+| filter | `$in $nin` | `filter.in-nin` | _skipped_ | 0.19 ms | — |
+| filter | `$exists` | `filter.exists` | _skipped_ | 0.26 ms | — |
+| filter | `$regex` | `filter.regex` | _skipped_ | 1.36 ms | — |
+| filter | `$and $or` | `filter.and-or` | _skipped_ | 0.18 ms | — |
+| filter | `dot-path` | `filter.nested-path` | _skipped_ | 0.11 ms | — |
+| expression | `$add $subtract $multiply $divide $mod` | `expr.arithmetic` | _skipped_ | 1.08 ms | — |
+| expression | `$toLower $toUpper $concat $strLenCP` | `expr.string` | _skipped_ | 0.15 ms | — |
+| expression | `$cond $switch $ifNull` | `expr.cond` | _skipped_ | 0.16 ms | — |
+| expression | `$size $arrayElemAt $concatArrays $reverseArray $slice $in` | `expr.array` | _skipped_ | 0.28 ms | — |
+| pipeline | `$match $sort $limit` | `pipeline.match-sort-limit` | _skipped_ | 0.18 ms | — |
+| pipeline | `$group ($sum $avg $min $max $push $first $last)` | `pipeline.group` | _skipped_ | 0.53 ms | — |
+| pipeline | `$lookup $unwind` | `pipeline.lookup-unwind` | _skipped_ | 0.48 ms | — |
+| pipeline | `$count` | `pipeline.count` | _skipped_ | 0.10 ms | — |
+| pipeline | `$replaceRoot` | `pipeline.replace-root` | _skipped_ | 0.07 ms | — |
+| update | `$set $inc $unset` | `update.set-inc-unset` | _skipped_ | 0.45 ms | — |
+| update | `upsert` | `update.upsert` | _skipped_ | 0.17 ms | — |
+| update | `delete` | `update.delete` | _skipped_ | 0.20 ms | — |
 
 ## Performance (embedded mode, memory backend)
 
@@ -36,12 +36,31 @@ Single-threaded Node 20 process, no network. Numbers vary across machines.
 
 | Workload | Iterations | Total time | Throughput |
 |---|---:|---:|---:|
-| insertOne (cold) | 5,000 | 63.1 ms | **79,288 ops/s** |
-| findOne(_id) — pk | 5,000 | 74.5 ms | **67,082 ops/s** |
-| findOne(val) — idx | 5,000 | 70.6 ms | **70,866 ops/s** |
-| find range (val gt) | 1,000 | 112.3 ms | **8,904 ops/s** |
-| aggregate $group sum | 200 | 690.7 ms | **290 ops/s** |
-| updateOne $inc | 2,000 | 133.5 ms | **14,977 ops/s** |
+| insertOne (cold) | 5,000 | 57.7 ms | **86,668 ops/s** |
+| findOne(_id) — pk | 5,000 | 68.8 ms | **72,721 ops/s** |
+| findOne(val) — idx | 5,000 | 64.2 ms | **77,854 ops/s** |
+| find range (val gt) | 1,000 | 108.3 ms | **9,232 ops/s** |
+| aggregate $group sum | 200 | 678.3 ms | **295 ops/s** |
+| updateOne $inc | 2,000 | 159.6 ms | **12,529 ops/s** |
+
+## Performance vs SQLite (better-sqlite3)
+
+Both engines run in-process. SQLite uses prepared statements; SavannahDB
+uses its public SDK API. **Ratio** = SavannahDB / SQLite — values ≥ 1.0 mean
+SavannahDB is at least as fast; < 1.0 means SQLite wins. Rows flagged with
+**⚠** are > 2× slower than SQLite — those are the optimisation targets.
+
+| Workload | SavannahDB | SQLite | Ratio |
+|---|---:|---:|---:|
+| insertOne | 90,823 ops/s | 444,247 ops/s | **0.20** ⚠ |
+| findOne(_id) — pk | 62,764 ops/s | 839,490 ops/s | **0.07** ⚠ |
+| findOne(val) — idx | 78,302 ops/s | 677,975 ops/s | **0.12** ⚠ |
+| updateOne $inc | 15,439 ops/s | 339,645 ops/s | **0.05** ⚠ |
+| bulk insert (50,000 docs, _id only) | 199,857 ops/s | 859,437 ops/s | **0.23** ⚠ |
+| bulk insert (50,000 docs, +secondary idx) | 121,757 ops/s | 558,355 ops/s | **0.22** ⚠ |
+| build secondary index over 50,000 docs | 279.5 ms | 21.1 ms | **0.08** ⚠ |
+| range scan (val gt, 50,000 docs) | 5,344 ops/s | 11,500 ops/s | **0.46** ⚠ |
+| aggregate $group sum (50,000 docs) | 21 ops/s | 422 ops/s | **0.05** ⚠ |
 
 ## Persistence (Canopy backend)
 

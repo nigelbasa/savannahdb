@@ -92,6 +92,33 @@ for (const p of report.perf) {
 }
 w('');
 
+// --- Comparative perf (SavannahDB vs SQLite) --------------------------------
+if (report.comparativePerf && report.comparativePerf.length > 0) {
+  w('## Performance vs SQLite (better-sqlite3)');
+  w('');
+  w('Both engines run in-process. SQLite uses prepared statements; SavannahDB');
+  w('uses its public SDK API. **Ratio** = SavannahDB / SQLite — values ≥ 1.0 mean');
+  w('SavannahDB is at least as fast; < 1.0 means SQLite wins. Rows flagged with');
+  w('**⚠** are > 2× slower than SQLite — those are the optimisation targets.');
+  w('');
+  w('| Workload | SavannahDB | SQLite | Ratio |');
+  w('|---|---:|---:|---:|');
+  for (const r of report.comparativePerf) {
+    let sav, sql;
+    if (r.kind === 'oneshot') {
+      sav = `${r.savannahMs} ms`;
+      sql = `${r.sqliteMs} ms`;
+    } else {
+      sav = `${r.savannahOpsPerSec.toLocaleString()} ops/s`;
+      sql = `${r.sqliteOpsPerSec.toLocaleString()} ops/s`;
+    }
+    const flag = r.ratio < 0.5 ? ' ⚠' : '';
+    const ratioCell = `**${r.ratio.toFixed(2)}**${flag}`;
+    w(`| ${r.label} | ${sav} | ${sql} | ${ratioCell} |`);
+  }
+  w('');
+}
+
 // --- Persistence ------------------------------------------------------------
 const persistOk = report.persistence.every(r => r.ok);
 w('## Persistence (Canopy backend)');

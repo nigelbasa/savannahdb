@@ -16,6 +16,7 @@
     "smoke:canopy-restart": "node scripts/smoke-canopy-restart.mjs",
     "smoke:driver": "node scripts/smoke-driver.mjs",
     "smoke:engine": "node scripts/smoke-engine.mjs",
+    "bench": "node scripts/audit/run.mjs --skip-mongo && node scripts/audit/render.mjs",
     "dev": "npm run dev --workspace @nigelbasa/savannahdb",
     "start": "npm start --workspace @nigelbasa/savannahdb"
   },
@@ -23,6 +24,7 @@
     "node-addon-api": "^8.3.0"
   },
   "devDependencies": {
+    "better-sqlite3": "^11.7.0",
     "cmake-js": "^7.3.0"
   }
 }

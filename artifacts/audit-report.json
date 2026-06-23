@@ -1,189 +1,190 @@
 {
-  "generatedAt": "2026-05-23T21:25:44.044Z",
+  "generatedAt": "2026-06-23T17:57:49.913Z",
   "node": "v25.8.1",
   "platform": "win32-x64",
   "mongo": {
-    "version": "8.2.7"
+    "available": false,
+    "uri": "mongodb://127.0.0.1:27017"
   },
   "accuracy": [
     {
       "id": "filter.eq",
       "category": "filter",
       "operator": "$eq",
-      "verdict": "match",
-      "savannahMs": 1.52,
-      "mongoMs": 2.92,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 2.1,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "filter.ne",
       "category": "filter",
       "operator": "$ne",
-      "verdict": "match",
-      "savannahMs": 0.13,
-      "mongoMs": 0.93,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.14,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "filter.gt-gte-lt-lte",
       "category": "filter",
       "operator": "$gt $gte $lt $lte",
-      "verdict": "match",
-      "savannahMs": 0.51,
-      "mongoMs": 6.34,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.44,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "filter.in-nin",
       "category": "filter",
       "operator": "$in $nin",
-      "verdict": "match",
-      "savannahMs": 0.4,
-      "mongoMs": 1.59,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.19,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "filter.exists",
       "category": "filter",
       "operator": "$exists",
-      "verdict": "match",
-      "savannahMs": 0.31,
-      "mongoMs": 1.83,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.26,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "filter.regex",
       "category": "filter",
       "operator": "$regex",
-      "verdict": "match",
-      "savannahMs": 0.3,
-      "mongoMs": 0.83,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 1.36,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "filter.and-or",
       "category": "filter",
       "operator": "$and $or",
-      "verdict": "match",
-      "savannahMs": 0.21,
-      "mongoMs": 0.82,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.18,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "filter.nested-path",
       "category": "filter",
       "operator": "dot-path",
-      "verdict": "match",
-      "savannahMs": 0.12,
-      "mongoMs": 0.76,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.11,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "expr.arithmetic",
       "category": "expression",
       "operator": "$add $subtract $multiply $divide $mod",
-      "verdict": "match",
-      "savannahMs": 0.48,
-      "mongoMs": 1.61,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 1.08,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "expr.string",
       "category": "expression",
       "operator": "$toLower $toUpper $concat $strLenCP",
-      "verdict": "match",
-      "savannahMs": 0.23,
-      "mongoMs": 1.99,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.15,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "expr.cond",
       "category": "expression",
       "operator": "$cond $switch $ifNull",
-      "verdict": "match",
-      "savannahMs": 0.24,
-      "mongoMs": 1.44,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.16,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "expr.array",
       "category": "expression",
       "operator": "$size $arrayElemAt $concatArrays $reverseArray $slice $in",
-      "verdict": "match",
-      "savannahMs": 0.38,
-      "mongoMs": 0.91,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.28,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "pipeline.match-sort-limit",
       "category": "pipeline",
       "operator": "$match $sort $limit",
-      "verdict": "match",
-      "savannahMs": 0.19,
-      "mongoMs": 1.05,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.18,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "pipeline.group",
       "category": "pipeline",
       "operator": "$group ($sum $avg $min $max $push $first $last)",
-      "verdict": "match",
-      "savannahMs": 0.45,
-      "mongoMs": 2.13,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.53,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "pipeline.lookup-unwind",
       "category": "pipeline",
       "operator": "$lookup $unwind",
-      "verdict": "match",
-      "savannahMs": 0.8,
-      "mongoMs": 1.44,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.48,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "pipeline.count",
       "category": "pipeline",
       "operator": "$count",
-      "verdict": "match",
-      "savannahMs": 0.18,
-      "mongoMs": 1.43,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.1,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "pipeline.replace-root",
       "category": "pipeline",
       "operator": "$replaceRoot",
-      "verdict": "match",
-      "savannahMs": 0.17,
-      "mongoMs": 0.85,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.07,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "update.set-inc-unset",
       "category": "update",
       "operator": "$set $inc $unset",
-      "verdict": "match",
-      "savannahMs": 0.4,
-      "mongoMs": 2.54,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.45,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "update.upsert",
       "category": "update",
       "operator": "upsert",
-      "verdict": "match",
-      "savannahMs": 0.23,
-      "mongoMs": 1.55,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.17,
+      "mongoMs": null,
       "diff": null
     },
     {
       "id": "update.delete",
       "category": "update",
       "operator": "delete",
-      "verdict": "match",
-      "savannahMs": 0.27,
-      "mongoMs": 1.64,
+      "verdict": "mongo-unavailable",
+      "savannahMs": 0.2,
+      "mongoMs": null,
       "diff": null
     }
   ],
@@ -191,38 +192,106 @@
     {
       "label": "insertOne (cold)",
       "iterations": 5000,
-      "totalMs": 63.1,
-      "opsPerSec": 79288
+      "totalMs": 57.7,
+      "opsPerSec": 86668
     },
     {
       "label": "findOne(_id) — pk",
       "iterations": 5000,
-      "totalMs": 74.5,
-      "opsPerSec": 67082
+      "totalMs": 68.8,
+      "opsPerSec": 72721
     },
     {
       "label": "findOne(val) — idx",
       "iterations": 5000,
-      "totalMs": 70.6,
-      "opsPerSec": 70866
+      "totalMs": 64.2,
+      "opsPerSec": 77854
     },
     {
       "label": "find range (val gt)",
       "iterations": 1000,
-      "totalMs": 112.3,
-      "opsPerSec": 8904
+      "totalMs": 108.3,
+      "opsPerSec": 9232
     },
     {
       "label": "aggregate $group sum",
       "iterations": 200,
-      "totalMs": 690.7,
-      "opsPerSec": 290
+      "totalMs": 678.3,
+      "opsPerSec": 295
     },
     {
       "label": "updateOne $inc",
       "iterations": 2000,
-      "totalMs": 133.5,
-      "opsPerSec": 14977
+      "totalMs": 159.6,
+      "opsPerSec": 12529
+    }
+  ],
+  "comparativePerf": [
+    {
+      "label": "insertOne",
+      "iterations": 5000,
+      "savannahOpsPerSec": 90823,
+      "sqliteOpsPerSec": 444247,
+      "ratio": 0.2
+    },
+    {
+      "label": "findOne(_id) — pk",
+      "iterations": 5000,
+      "savannahOpsPerSec": 62764,
+      "sqliteOpsPerSec": 839490,
+      "ratio": 0.07
+    },
+    {
+      "label": "findOne(val) — idx",
+      "iterations": 5000,
+      "savannahOpsPerSec": 78302,
+      "sqliteOpsPerSec": 677975,
+      "ratio": 0.12
+    },
+    {
+      "label": "updateOne $inc",
+      "iterations": 2000,
+      "savannahOpsPerSec": 15439,
+      "sqliteOpsPerSec": 339645,
+      "ratio": 0.05
+    },
+    {
+      "label": "bulk insert (50,000 docs, _id only)",
+      "iterations": 50000,
+      "savannahOpsPerSec": 199857,
+      "sqliteOpsPerSec": 859437,
+      "ratio": 0.23
+    },
+    {
+      "label": "bulk insert (50,000 docs, +secondary idx)",
+      "iterations": 50000,
+      "savannahOpsPerSec": 121757,
+      "sqliteOpsPerSec": 558355,
+      "ratio": 0.22
+    },
+    {
+      "label": "build secondary index over 50,000 docs",
+      "iterations": 1,
+      "savannahOpsPerSec": 3.58,
+      "sqliteOpsPerSec": 47.39,
+      "ratio": 0.08,
+      "savannahMs": 279.5,
+      "sqliteMs": 21.1,
+      "kind": "oneshot"
+    },
+    {
+      "label": "range scan (val gt, 50,000 docs)",
+      "iterations": 1000,
+      "savannahOpsPerSec": 5344,
+      "sqliteOpsPerSec": 11500,
+      "ratio": 0.46
+    },
+    {
+      "label": "aggregate $group sum (50,000 docs)",
+      "iterations": 100,
+      "savannahOpsPerSec": 21,
+      "sqliteOpsPerSec": 422,
+      "ratio": 0.05
     }
   ],
   "persistence": [

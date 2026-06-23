@@ -235,6 +235,285 @@ await bench('updateOne $inc', async i => {
 }, 2000);
 
 // ----------------------------------------------------------------------------
+// Comparative perf — same workloads, SavannahDB vs SQLite (better-sqlite3,
+// in-process). SQLite is the right comparator for an embedded doc DB: same
+// no-network paradigm, well-tuned C engine, predictable numbers. We include
+// the comparison only when better-sqlite3 is installed; CI installs it, so
+// the bench workflow always populates these rows. Local dev runs without it
+// just skip the section.
+//
+// Workloads cover both small-N micro ops (to catch per-call overhead) and
+// larger N=50,000 sweeps (to expose index/scan scaling that 5K hides).
+// ----------------------------------------------------------------------------
+
+const comparativeResults = [];
+
+let Database = null;
+try {
+  ({ default: Database } = await import('better-sqlite3'));
+} catch (err) {
+  // Loud, not silent. The comparator is the headline of this report — a
+  // missing better-sqlite3 in CI usually means a missed --ignore-scripts or
+  // an unsupported Node version; we want that to be obvious, not buried.
+  console.warn('=== better-sqlite3 unavailable, comparative perf SKIPPED ===');
+  console.warn(`reason: ${err.message}`);
+  if (process.env.CI === 'true') {
+    console.warn('(failing this in CI: set BENCH_ALLOW_NO_SQLITE=1 to bypass)');
+    if (!process.env.BENCH_ALLOW_NO_SQLITE) {
+      process.exitCode = 2;
+    }
+  }
+}
+
+if (Database) {
+  // Each comparative workload runs both engines from a known-clean state with
+  // identical document shapes. We avoid any prepared-statement reuse advantage
+  // for SQLite that the SavannahDB SDK can't match — call the SDK API the same
+  // way users would.
+  async function compare(label, scale, savFn, sqliteFn, opts = {}) {
+    // Reads benefit from cache/branch-predictor warmup; destructive ops
+    // (insert) would collide with the main loop on the same ids and crash
+    // SQLite's UNIQUE constraint, so warmup is skipped for those.
+    if (opts.warmup !== false) {
+      for (let i = 0; i < Math.min(50, scale.iter); i++) await savFn(i);
+      for (let i = 0; i < Math.min(50, scale.iter); i++) sqliteFn(i);
+    }
+
+    const tSav = performance.now();
+    for (let i = 0; i < scale.iter; i++) await savFn(i);
+    const savElapsed = performance.now() - tSav;
+
+    const tSql = performance.now();
+    for (let i = 0; i < scale.iter; i++) sqliteFn(i);
+    const sqlElapsed = performance.now() - tSql;
+
+    const savOps = +(scale.iter / (savElapsed / 1000)).toFixed(0);
+    const sqlOps = +(scale.iter / (sqlElapsed / 1000)).toFixed(0);
+    const ratio = +(savOps / sqlOps).toFixed(2);
+
+    comparativeResults.push({
+      label,
+      iterations: scale.iter,
+      savannahOpsPerSec: savOps,
+      sqliteOpsPerSec: sqlOps,
+      ratio,
+    });
+
+    const marker = ratio >= 0.9 ? '✓' : (ratio >= 0.5 ? '·' : '!');
+    process.stdout.write(
+      `  ${marker} ${label.padEnd(34)} sav ${savOps.toLocaleString().padStart(8)}/s  ` +
+      `sqlite ${sqlOps.toLocaleString().padStart(8)}/s  ratio ${ratio.toFixed(2)}\n`
+    );
+  }
+
+  // -- Small-N point ops (per-call overhead) ---------------------------------
+  {
+    const sav = new SavannahDB().collection('cmp', 'small');
+    const sqlite = new Database(':memory:');
+    sqlite.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, val INTEGER)');
+    const insertStmt = sqlite.prepare('INSERT INTO t (id, name, val) VALUES (?, ?, ?)');
+    const N = 5000;
+
+    // Both engines use the same id range [0, N) so subsequent read workloads
+    // exercise identical key cardinality. Insert workload skips warmup so the
+    // main loop doesn't collide with already-inserted ids.
+    await compare('insertOne', { iter: N },
+      async i => { await sav.insertOne({ _id: i, name: `doc-${i}`, val: i }); },
+      i => { insertStmt.run(i, `doc-${i}`, i); },
+      { warmup: false },
+    );
+
+    // Build secondary indexes on both sides so subsequent reads are fair.
+    await sav.createIndex('val_idx', 'val');
+    sqlite.exec('CREATE INDEX val_idx ON t(val)');
+
+    const findByPk = sqlite.prepare('SELECT * FROM t WHERE id = ?');
+    await compare('findOne(_id) — pk', { iter: N },
+      async i => { await sav.findOne({ _id: i }); },
+      i => { findByPk.get(i); },
+    );
+
+    const findByVal = sqlite.prepare('SELECT * FROM t WHERE val = ?');
+    await compare('findOne(val) — idx', { iter: N },
+      async i => { await sav.findOne({ val: i }); },
+      i => { findByVal.get(i); },
+    );
+
+    const updateById = sqlite.prepare('UPDATE t SET val = val + 1 WHERE id = ?');
+    await compare('updateOne $inc', { iter: 2000 },
+      async i => { await sav.updateOne({ _id: i % 1000 }, { $inc: { val: 1 } }); },
+      i => { updateById.run(i % 1000); },
+    );
+
+    sqlite.close();
+  }
+
+  // -- Index-stress workloads at scale (50K docs) ----------------------------
+  // These expose what the 5K micro-ops hide: index maintenance during bulk
+  // load, range-scan selectivity, and aggregation cost over a large set.
+  {
+    const SCALE = 50_000;
+
+    // (1) Bulk-insert with implicit _id index only (no secondary).
+    //     Measures pure insert path + _id maintenance.
+    const savBulk = new SavannahDB().collection('cmp', 'bulk_idx_id_only');
+    const sqliteBulk = new Database(':memory:');
+    sqliteBulk.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, val INTEGER)');
+    const sqlInsertBulk = sqliteBulk.prepare('INSERT INTO t (id, name, val) VALUES (?, ?, ?)');
+    const sqlInsertBulkTx = sqliteBulk.transaction(rows => {
+      for (const r of rows) sqlInsertBulk.run(r.id, r.name, r.val);
+    });
+
+    const bulkRows = Array.from({ length: SCALE }, (_, i) => ({
+      id: i, _id: i, name: `doc-${i}`, val: (i * 7919) % SCALE,
+    }));
+
+    const tSavBulk = performance.now();
+    // Chunk SavannahDB inserts; the SDK's insertMany already takes arrays.
+    for (let i = 0; i < SCALE; i += 1000) {
+      await savBulk.insertMany(bulkRows.slice(i, i + 1000));
+    }
+    const savBulkMs = performance.now() - tSavBulk;
+
+    const tSqlBulk = performance.now();
+    sqlInsertBulkTx(bulkRows);
+    const sqlBulkMs = performance.now() - tSqlBulk;
+
+    const savBulkOps = +(SCALE / (savBulkMs / 1000)).toFixed(0);
+    const sqlBulkOps = +(SCALE / (sqlBulkMs / 1000)).toFixed(0);
+    comparativeResults.push({
+      label: `bulk insert (${SCALE.toLocaleString()} docs, _id only)`,
+      iterations: SCALE,
+      savannahOpsPerSec: savBulkOps,
+      sqliteOpsPerSec: sqlBulkOps,
+      ratio: +(savBulkOps / sqlBulkOps).toFixed(2),
+    });
+    process.stdout.write(
+      `  · bulk insert ${SCALE} docs (_id only)     sav ${savBulkOps.toLocaleString()}/s  sqlite ${sqlBulkOps.toLocaleString()}/s\n`
+    );
+
+    // (1b) Bulk-insert with secondary index ALREADY present — this is what
+    //      the AUDIT.md note about "_id index costs ~30%" is really asking:
+    //      how much does maintaining a non-PK index on every write cost?
+    //      The ratio against (1) is the index-write tax.
+    const savBulkIdx = new SavannahDB().collection('cmp', 'bulk_with_secondary');
+    await savBulkIdx.createIndex('val_idx', 'val');
+    const sqliteBulkIdx = new Database(':memory:');
+    sqliteBulkIdx.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, val INTEGER)');
+    sqliteBulkIdx.exec('CREATE INDEX val_idx ON t(val)');
+    const sqlInsertIdx = sqliteBulkIdx.prepare('INSERT INTO t (id, name, val) VALUES (?, ?, ?)');
+    const sqlInsertIdxTx = sqliteBulkIdx.transaction(rows => {
+      for (const r of rows) sqlInsertIdx.run(r._id, r.name, r.val);
+    });
+
+    const tSavBulkIdx = performance.now();
+    for (let i = 0; i < SCALE; i += 1000) {
+      await savBulkIdx.insertMany(bulkRows.slice(i, i + 1000));
+    }
+    const savBulkIdxMs = performance.now() - tSavBulkIdx;
+
+    const tSqlBulkIdx = performance.now();
+    sqlInsertIdxTx(bulkRows);
+    const sqlBulkIdxMs = performance.now() - tSqlBulkIdx;
+
+    const savBulkIdxOps = +(SCALE / (savBulkIdxMs / 1000)).toFixed(0);
+    const sqlBulkIdxOps = +(SCALE / (sqlBulkIdxMs / 1000)).toFixed(0);
+    comparativeResults.push({
+      label: `bulk insert (${SCALE.toLocaleString()} docs, +secondary idx)`,
+      iterations: SCALE,
+      savannahOpsPerSec: savBulkIdxOps,
+      sqliteOpsPerSec: sqlBulkIdxOps,
+      ratio: +(savBulkIdxOps / sqlBulkIdxOps).toFixed(2),
+    });
+    const indexWriteTax = (1 - savBulkIdxOps / savBulkOps) * 100;
+    process.stdout.write(
+      `  · bulk insert ${SCALE} docs (+sec idx)     sav ${savBulkIdxOps.toLocaleString()}/s  sqlite ${sqlBulkIdxOps.toLocaleString()}/s  ` +
+      `(index-write tax: ${indexWriteTax.toFixed(0)}%)\n`
+    );
+    sqliteBulkIdx.close();
+
+    // (2) Build secondary index over the loaded set (one-shot indexing speed).
+    const tSavIdx = performance.now();
+    await savBulk.createIndex('val_idx', 'val');
+    const savIdxMs = +(performance.now() - tSavIdx).toFixed(1);
+
+    const tSqlIdx = performance.now();
+    sqliteBulk.exec('CREATE INDEX val_idx ON t(val)');
+    const sqlIdxMs = +(performance.now() - tSqlIdx).toFixed(1);
+
+    comparativeResults.push({
+      label: `build secondary index over ${SCALE.toLocaleString()} docs`,
+      iterations: 1,
+      savannahOpsPerSec: +(1000 / savIdxMs).toFixed(2),
+      sqliteOpsPerSec: +(1000 / sqlIdxMs).toFixed(2),
+      ratio: +(sqlIdxMs / savIdxMs).toFixed(2), // higher = SavannahDB faster
+      savannahMs: savIdxMs,
+      sqliteMs: sqlIdxMs,
+      kind: 'oneshot',
+    });
+    process.stdout.write(
+      `  · build secondary index                   sav ${savIdxMs} ms        sqlite ${sqlIdxMs} ms\n`
+    );
+
+    // (3) Range scan with idx — 1K queries, each returning ~50 docs.
+    const sqlRange = sqliteBulk.prepare('SELECT * FROM t WHERE val > ? AND val < ?');
+    const tSavRange = performance.now();
+    for (let i = 0; i < 1000; i++) {
+      await savBulk.find({ val: { $gt: i, $lt: i + 50 } }).toArray();
+    }
+    const savRangeMs = performance.now() - tSavRange;
+    const tSqlRange = performance.now();
+    for (let i = 0; i < 1000; i++) {
+      sqlRange.all(i, i + 50);
+    }
+    const sqlRangeMs = performance.now() - tSqlRange;
+    const savRangeOps = +(1000 / (savRangeMs / 1000)).toFixed(0);
+    const sqlRangeOps = +(1000 / (sqlRangeMs / 1000)).toFixed(0);
+    comparativeResults.push({
+      label: `range scan (val gt, ${SCALE.toLocaleString()} docs)`,
+      iterations: 1000,
+      savannahOpsPerSec: savRangeOps,
+      sqliteOpsPerSec: sqlRangeOps,
+      ratio: +(savRangeOps / sqlRangeOps).toFixed(2),
+    });
+    process.stdout.write(
+      `  · range scan over ${SCALE} docs           sav ${savRangeOps.toLocaleString()}/s  sqlite ${sqlRangeOps.toLocaleString()}/s\n`
+    );
+
+    // (4) Aggregation at scale: SUM(val) over 50K docs, 100 iterations.
+    //     This is the workload most likely to expose the pipeline hot path
+    //     (AUDIT.md flagged 290 ops/s at 5K — at 50K we should see whether
+    //     the slowdown is linear-in-N or worse).
+    const sqlSum = sqliteBulk.prepare('SELECT SUM(val) as total FROM t');
+    const ITER_AGG = 100;
+    const tSavAgg = performance.now();
+    for (let i = 0; i < ITER_AGG; i++) {
+      await savBulk.aggregate([{ $group: { _id: null, total: { $sum: '$val' } } }]).toArray();
+    }
+    const savAggMs = performance.now() - tSavAgg;
+    const tSqlAgg = performance.now();
+    for (let i = 0; i < ITER_AGG; i++) {
+      sqlSum.get();
+    }
+    const sqlAggMs = performance.now() - tSqlAgg;
+    const savAggOps = +(ITER_AGG / (savAggMs / 1000)).toFixed(0);
+    const sqlAggOps = +(ITER_AGG / (sqlAggMs / 1000)).toFixed(0);
+    comparativeResults.push({
+      label: `aggregate $group sum (${SCALE.toLocaleString()} docs)`,
+      iterations: ITER_AGG,
+      savannahOpsPerSec: savAggOps,
+      sqliteOpsPerSec: sqlAggOps,
+      ratio: +(savAggOps / sqlAggOps).toFixed(2),
+    });
+    process.stdout.write(
+      `  · aggregate SUM over ${SCALE} docs        sav ${savAggOps.toLocaleString()}/s  sqlite ${sqlAggOps.toLocaleString()}/s\n`
+    );
+
+    sqliteBulk.close();
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Persistence (Canopy backend) — insert, close, reopen, verify.
 // ----------------------------------------------------------------------------
 
@@ -339,6 +618,7 @@ const report = {
     : { available: false, uri: MONGODB_URI },
   accuracy: accuracyResults,
   perf: perfResults,
+  comparativePerf: comparativeResults,
   persistence: persistResults,
 };
 

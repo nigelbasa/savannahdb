@@ -1,0 +1,103 @@
+name: Benchmarks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel in-progress runs for the same ref when a new commit arrives.
+# Benchmarks take 3-5 minutes; no point burning runners on stale shas.
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bench:
+    name: Audit + comparative bench (linux x64)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # The PR-comment step posts the summary; default GITHUB_TOKEN scopes are
+      # read-only on GitHub-recommended setups.
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Same vcpkg baseline as prebuild.yml so libbson resolves identically.
+      # lukka/run-vcpkg caches the binary install across runs, which keeps the
+      # bench job fast after the first warm-up.
+      - name: Install vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: aa40adda5352e87655b8583cfb2451d5e9e276fd
+
+      - name: Install CMake
+        uses: lukka/get-cmake@latest
+
+      # IMPORTANT: do NOT pass --ignore-scripts here. better-sqlite3 fetches its
+      # native binding in a postinstall script; with scripts disabled, the
+      # import in run.mjs would silently fall through to the catch and skip
+      # the comparative section entirely (CI green, AUDIT.md empty of SQLite).
+      - name: Install workspace deps
+        run: npm install
+
+      - name: Build native addon (linux x64)
+        run: npx cmake-js compile --CDCMAKE_TOOLCHAIN_FILE=$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake --CDVCPKG_TARGET_TRIPLET=x64-linux
+
+      - name: Build TS
+        run: npm run build --workspace @nigelbasa/savannahdb
+
+      # The audit's accuracy section needs MongoDB; we don't run one in this job
+      # (would add 30+ s startup and isn't the point of bench). --skip-mongo
+      # tells the runner to mark accuracy verdicts as "skipped" but still run
+      # the perf + comparative + persistence sections.
+      - name: Run audit + comparative bench
+        run: npm run bench
+
+      - name: Show generated AUDIT.md
+        run: cat AUDIT.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-report
+          path: |
+            AUDIT.md
+            artifacts/audit-report.json
+          if-no-files-found: error
+
+      # PR comment with a compact summary so reviewers see perf at a glance.
+      # Skipped on push-to-main (no PR to comment on).
+      - name: Comment perf summary on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('artifacts/audit-report.json', 'utf8'));
+            const lines = ['## Benchmark summary', ''];
+            if (report.comparativePerf?.length) {
+              lines.push('| Workload | SavannahDB | SQLite | Ratio |');
+              lines.push('|---|---:|---:|---:|');
+              for (const r of report.comparativePerf) {
+                const sav = r.kind === 'oneshot' ? `${r.savannahMs} ms`
+                  : `${r.savannahOpsPerSec.toLocaleString()} ops/s`;
+                const sql = r.kind === 'oneshot' ? `${r.sqliteMs} ms`
+                  : `${r.sqliteOpsPerSec.toLocaleString()} ops/s`;
+                const flag = r.ratio < 0.5 ? ' ⚠' : '';
+                lines.push(`| ${r.label} | ${sav} | ${sql} | **${r.ratio.toFixed(2)}**${flag} |`);
+              }
+              lines.push('');
+            }
+            lines.push('Full report in workflow artifacts (`audit-report`).');
+            const body = lines.join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
