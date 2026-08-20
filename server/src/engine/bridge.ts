@@ -124,34 +124,55 @@ export interface EngineBindings {
 }
 
 let engine: EngineBindings | null = null;
+// Preserved so getEngine() can report *why* the addon didn't load instead of a
+// generic "build it first" — the original code swallowed this and made packaging
+// failures (e.g. a bundled binary that can't see prebuilds/) impossible to debug.
+let loadError: unknown = null;
 
 try {
   const { createRequire } = await import('node:module');
   const require = createRequire(import.meta.url);
-  // node-gyp-build resolves prebuilds/<platform>-<arch>/node.napi.node when
-  // installed from npm, or falls back to build/Release/<addon>.node when
-  // running from a checkout where cmake-js has just built locally.
-  const nodeGypBuild = require('node-gyp-build') as (dir: string) => EngineBindings;
   const { fileURLToPath } = await import('node:url');
   const path = await import('node:path');
-  // Walk up from server/dist/engine to the package root (server/) — that's
-  // where prebuilds/ lives in the published tarball. For repo-checkout dev
-  // the same walk hits the workspace root because build/Release sits there.
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const packageRoot = path.resolve(here, '..', '..');
-  try {
-    engine = nodeGypBuild(packageRoot) as EngineBindings;
-  } catch {
-    // Repo-checkout fallback: cmake-js builds into <repo-root>/build/Release.
-    engine = nodeGypBuild(path.resolve(packageRoot, '..')) as EngineBindings;
+
+  // 1. Explicit override. When the package is embedded in a single-file binary
+  //    (bun/pkg/SEA compile), `import.meta.url` points inside the virtual
+  //    bundle filesystem, so node-gyp-build's prebuilds/ walk resolves to a
+  //    path that doesn't exist on the real disk. The host app ships the .node
+  //    alongside the executable and points SAVANNAHDB_ADDON at it. A direct
+  //    require() of an absolute path loads fine from the real FS even inside a
+  //    compiled binary (verified under bun --compile).
+  const override = process.env.SAVANNAHDB_ADDON;
+  if (override) {
+    engine = require(override) as EngineBindings;
+  } else {
+    // node-gyp-build resolves prebuilds/<platform>-<arch>/node.napi.node when
+    // installed from npm, or falls back to build/Release/<addon>.node when
+    // running from a checkout where cmake-js has just built locally.
+    const nodeGypBuild = require('node-gyp-build') as (dir: string) => EngineBindings;
+    // Walk up from server/dist/engine to the package root (server/) — that's
+    // where prebuilds/ lives in the published tarball. For repo-checkout dev
+    // the same walk hits the workspace root because build/Release sits there.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const packageRoot = path.resolve(here, '..', '..');
+    try {
+      engine = nodeGypBuild(packageRoot) as EngineBindings;
+    } catch {
+      // Repo-checkout fallback: cmake-js builds into <repo-root>/build/Release.
+      engine = nodeGypBuild(path.resolve(packageRoot, '..')) as EngineBindings;
+    }
   }
-} catch {
+} catch (e) {
+  loadError = e;
   engine = null;
 }
 
 export function getEngine(): EngineBindings {
   if (!engine) {
-    throw new Error('native engine not loaded — build the C++ addon first');
+    const detail = loadError
+      ? `: ${loadError instanceof Error ? loadError.message : String(loadError)}`
+      : ' — build the C++ addon first, or set SAVANNAHDB_ADDON to a prebuilt node.napi.node';
+    throw new Error(`native engine not loaded${detail}`);
   }
   return engine;
 }
