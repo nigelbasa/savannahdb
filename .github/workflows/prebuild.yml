@@ -76,9 +76,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Node 24, not 20: npm's OIDC trusted publishing needs npm >= 11.5.1, and
+      # current npm majors no longer install on Node 20 at all (npm@12 requires
+      # node ^22.22.2 || ^24.15.0 || >=26.0.0).
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install deps
@@ -105,10 +108,13 @@ jobs:
 
       # npm Trusted Publishing uses the OIDC token GH Actions injects when
       # id-token: write is granted (see `permissions:` above). It requires
-      # npm >= 11.5.1, but Node 20 ships npm 10 — upgrade the global npm
-      # before publishing.
+      # npm >= 11.5.1. Pin the major rather than tracking `latest`: `npm@latest`
+      # silently rolls onto a new major whose engines drop the runner's Node,
+      # which breaks the publish on a tag push with nothing else changed.
       - name: Upgrade npm for OIDC trusted publishing
-        run: npm install -g npm@latest
+        run: |
+          npm install -g npm@^11
+          npm --version
 
       # No NODE_AUTH_TOKEN: with the package configured as a Trusted Publisher
       # on npmjs.com (linked to this repo + workflow), npm authenticates via
