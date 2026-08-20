@@ -32,6 +32,12 @@ struct GroupAccumulatorSpec {
   std::string name;
   Kind kind{Kind::Sum};
   std::vector<std::uint8_t> expr_bytes;
+  // Pre-extracted `'$field.path'` for the fast accumulator path. Empty means
+  // the expression is anything more complex (operator doc, literal, nested
+  // expression) and we have to call the full evaluator per doc. The fast
+  // path skips the wrap_iter_value heap alloc + memcpy per doc per
+  // accumulator, which dominates the $group hot loop at scale.
+  std::string fast_field;
 };
 
 struct GroupState {
@@ -116,43 +122,146 @@ std::vector<std::vector<std::uint8_t>> apply_group_stage(
     else if (op == "$max") spec_item.kind = GroupAccumulatorSpec::Kind::Max;
     else if (op == "$avg") spec_item.kind = GroupAccumulatorSpec::Kind::Avg;
     else throw std::runtime_error("group accumulator not implemented");
+
+    // Pre-extract a simple `'$field.path'` so the hot loop can skip the
+    // wrap_iter_value allocation per doc. Anything more complex (operator
+    // doc, literal, nested expr) keeps fast_field empty and falls through
+    // to the full evaluator path.
+    {
+      bson_t holder;
+      bson_iter_t expr_it;
+      if (unwrap_iter(spec_item.expr_bytes, &holder, &expr_it)) {
+        std::string maybe_field;
+        if (field_ref_from_iter(expr_it, &maybe_field)) {
+          spec_item.fast_field = std::move(maybe_field);
+        }
+      }
+    }
+
     accumulators.push_back(std::move(spec_item));
   }
 
+  // Detect a constant `_id` (literals only — not field refs, not operator
+  // docs). When the id is the same for every doc, we can skip the per-doc
+  // id evaluation, id_doc construction, key allocation, and map lookup — and
+  // accumulate into a single GroupState pointer.
+  bool constant_id = false;
+  std::vector<std::uint8_t> constant_id_value;
+  std::string constant_id_key;
+  {
+    bson_t holder;
+    bson_iter_t expr_it;
+    if (unwrap_iter(id_expr, &holder, &expr_it)) {
+      const auto type = bson_iter_type(&expr_it);
+      bool is_op_doc = false;
+      if (type == BSON_TYPE_DOCUMENT) {
+        std::uint32_t len = 0;
+        const std::uint8_t* data = nullptr;
+        bson_iter_document(&expr_it, &len, &data);
+        bson_t inner;
+        bson_iter_t first;
+        if (bson_init_static(&inner, data, len) &&
+            bson_iter_init(&first, &inner) && bson_iter_next(&first)) {
+          const char* k = bson_iter_key(&first);
+          if (k && k[0] == '$') is_op_doc = true;
+        }
+      }
+      std::string maybe_field;
+      const bool is_field_ref = field_ref_from_iter(expr_it, &maybe_field);
+      if (!is_field_ref && !is_op_doc) {
+        bson_t empty_doc;
+        bson_init(&empty_doc);
+        auto v = evaluate_expression(empty_doc, id_expr).value_or(wrap_null());
+        bson_destroy(&empty_doc);
+        bson_t id_holder;
+        bson_iter_t id_value_iter;
+        if (unwrap_iter(v, &id_holder, &id_value_iter)) {
+          bson_t id_doc;
+          bson_init(&id_doc);
+          bson_append_iter(&id_doc, "_id", -1, &id_value_iter);
+          constant_id_key.assign(
+              reinterpret_cast<const char*>(bson_get_data(&id_doc)),
+              id_doc.len);
+          bson_destroy(&id_doc);
+          constant_id_value = std::move(v);
+          constant_id = true;
+        }
+      }
+    }
+  }
+
+  auto init_state = [&](GroupState& state, std::vector<std::uint8_t> id_value) {
+    state.id_value = std::move(id_value);
+    state.sums.assign(accumulators.size(), 0.0);
+    state.counts.assign(accumulators.size(), 0);
+    state.first_seen.assign(accumulators.size(), false);
+    state.last_seen.assign(accumulators.size(), false);
+    state.value_seen.assign(accumulators.size(), false);
+    state.first_values.resize(accumulators.size());
+    state.last_values.resize(accumulators.size());
+    state.values.resize(accumulators.size());
+    state.pushes.resize(accumulators.size());
+  };
+
   std::unordered_map<std::string, GroupState> groups;
   std::vector<std::string> order;
+  GroupState* single_state = nullptr;
+
   for (const auto& doc : docs) {
     bson_t source;
     bson_init_static(&source, doc.data(), doc.size());
-    auto evaluated_id = evaluate_expression(source, id_expr).value_or(wrap_null());
-    bson_t id_holder;
-    bson_iter_t id_value;
-    if (!unwrap_iter(evaluated_id, &id_holder, &id_value)) continue;
-    bson_t id_doc;
-    bson_init(&id_doc);
-    bson_append_iter(&id_doc, "_id", -1, &id_value);
-    const auto group_key = bytes_from_bson(id_doc);
-    bson_destroy(&id_doc);
-    const std::string key(group_key.begin(), group_key.end());
 
-    auto [state_it, inserted] = groups.try_emplace(key);
-    if (inserted) {
-      order.push_back(key);
-      state_it->second.id_value = std::move(evaluated_id);
-      state_it->second.sums.assign(accumulators.size(), 0.0);
-      state_it->second.counts.assign(accumulators.size(), 0);
-      state_it->second.first_seen.assign(accumulators.size(), false);
-      state_it->second.last_seen.assign(accumulators.size(), false);
-      state_it->second.value_seen.assign(accumulators.size(), false);
-      state_it->second.first_values.resize(accumulators.size());
-      state_it->second.last_values.resize(accumulators.size());
-      state_it->second.values.resize(accumulators.size());
-      state_it->second.pushes.resize(accumulators.size());
+    GroupState* state_ptr;
+    if (constant_id) {
+      if (!single_state) {
+        auto [it, _] = groups.try_emplace(constant_id_key);
+        order.push_back(constant_id_key);
+        init_state(it->second, constant_id_value);
+        single_state = &it->second;
+      }
+      state_ptr = single_state;
+    } else {
+      auto evaluated_id =
+          evaluate_expression(source, id_expr).value_or(wrap_null());
+      bson_t id_holder;
+      bson_iter_t id_value;
+      if (!unwrap_iter(evaluated_id, &id_holder, &id_value)) continue;
+      bson_t id_doc;
+      bson_init(&id_doc);
+      bson_append_iter(&id_doc, "_id", -1, &id_value);
+      const auto group_key = bytes_from_bson(id_doc);
+      bson_destroy(&id_doc);
+      std::string key(group_key.begin(), group_key.end());
+
+      auto [state_it, inserted] = groups.try_emplace(key);
+      if (inserted) {
+        order.push_back(key);
+        init_state(state_it->second, std::move(evaluated_id));
+      }
+      state_ptr = &state_it->second;
     }
-    auto& state = state_it->second;
+    GroupState& state = *state_ptr;
 
     for (std::size_t i = 0; i < accumulators.size(); ++i) {
       const auto& acc = accumulators[i];
+
+      // FAST PATH: simple field-path accumulator on numeric Sum/Avg. Skips
+      // evaluate_expression entirely — no wrap_iter_value heap alloc, no
+      // optional<vector> return, no second unwrap. Just resolve_path +
+      // bson_iter_as_double + add. This is the inner loop of every
+      // `{ $sum: '$x' }` / `{ $avg: '$x' }` pipeline.
+      if (!acc.fast_field.empty() &&
+          (acc.kind == GroupAccumulatorSpec::Kind::Sum ||
+           acc.kind == GroupAccumulatorSpec::Kind::Avg)) {
+        bson_iter_t fit;
+        if (resolve_path(source, acc.fast_field.c_str(), &fit) &&
+            jungle::query::v1::is_numeric(bson_iter_type(&fit))) {
+          state.sums[i] += bson_iter_as_double(&fit);
+          if (acc.kind == GroupAccumulatorSpec::Kind::Avg) state.counts[i] += 1;
+        }
+        continue;
+      }
+
       auto evaluated = evaluate_expression(source, acc.expr_bytes);
       if (acc.kind == GroupAccumulatorSpec::Kind::Sum) {
         if (!evaluated) continue;
