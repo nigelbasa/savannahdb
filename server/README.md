@@ -28,6 +28,10 @@ Prebuilt native binaries ship for common platforms (Windows x64, Linux x64, macO
 ### 2. Direct Embedded Mode (In-Process)
 Use SavannahDB directly in Node.js with zero server setup:
 
+> **Persistence is opt-in.** Without a `storage` block, SavannahDB runs in-memory
+> and all data is discarded when the process exits. Pass `backend: 'canopy'` with a
+> `root` path to durably persist to disk.
+
 ```javascript
 import { SavannahDB } from '@nigelbasa/savannahdb';
 
