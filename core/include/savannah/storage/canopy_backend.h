@@ -120,14 +120,13 @@ class CanopyBackend final : public IStorageBackend {
     std::string coll_name_;
     MemoryCollection& inner_;
     // Serializes mutations through the WAL. The bookkeeping (next_log_seq_,
-    // pending_ops_) and the multi-fwrite log append are not atomic on their
-    // own; without this mutex, two concurrent writes from different threads
-    // would interleave inside ops.bin and corrupt the log frame on replay.
+    // pending_bytes_) and the log append are not atomic on their own; without
+    // this mutex, two concurrent writes from different threads would
+    // interleave inside ops.bin and corrupt the log frame on replay.
     std::mutex write_mutex_;
     bool loaded_{false};
     std::uint64_t last_checkpoint_seq_{0};
     std::uint64_t next_log_seq_{1};
-    std::size_t pending_ops_{0};
     // Bytes appended since the last checkpoint. Checkpointing rewrites a
     // snapshot of the whole collection, so triggering it on an operation
     // count made write cost grow with collection size: every N writes paid an

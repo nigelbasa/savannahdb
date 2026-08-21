@@ -52,14 +52,22 @@ jobs:
       - name: Build TS
         run: npm run build --workspace @nigelbasa/savannahdb
 
-      # Storage/cursor smoke tests. bench.yml did not run these, which is why a
-      # use-after-free on the getMore path reached two releases: it returned
-      # intact data on Windows and corrupted BSON on Linux, and no CI job ever
-      # executed it on Linux.
+      # Storage and cursor smoke tests. `npm run bench` does not cover these --
+      # its persistence section only checks a clean restart, not an unclean
+      # kill or a torn log tail.
+      #
+      # They matter most on Linux. The durability path is full of platform
+      # branches (fsync vs _commit, rename vs MoveFileEx, the parent-directory
+      # fsync only POSIX needs) and is developed on Windows. bench.yml running
+      # no smoke tests at all is how a use-after-free on the getMore path
+      # reached two published releases: it returned intact data under the
+      # Windows allocator and corrupted BSON under glibc.
       - name: Storage + cursor smoke tests
         run: |
           npm run smoke:engine
           npm run smoke:canopy-restart
+          npm run smoke:default-persistence
+          npm run smoke:canopy-durability
 
       # The audit's accuracy section needs MongoDB; we don't run one in this job
       # (would add 30+ s startup and isn't the point of bench). --skip-mongo

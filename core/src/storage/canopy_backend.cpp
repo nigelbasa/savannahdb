@@ -11,6 +11,9 @@
 #include <io.h>
 #include <windows.h>
 #else
+// fcntl.h for ::open — the directory fsync in atomic_replace_file needs a
+// descriptor for the parent directory.
+#include <fcntl.h>
 #include <unistd.h>
 #endif
 
@@ -139,6 +142,21 @@ void atomic_replace_file(const std::filesystem::path& source,
   std::filesystem::rename(source, target, ec);
   if (ec) {
     throw std::runtime_error("Canopy failed to atomically replace file: " + ec.message());
+  }
+  // POSIX rename is atomic but not durable: the new directory entry can still
+  // be lost to a power cut until the *directory* is fsynced. Windows covers
+  // this with MOVEFILE_WRITE_THROUGH above.
+  //
+  // This matters specifically because checkpoint() truncates the log right
+  // after replacing the state snapshot. If the snapshot's rename were lost
+  // while the truncation survived, the committed data would be gone with no
+  // torn tail left to recover from -- the one silent-loss window in this
+  // design. Under the old fsync-per-record policy the log itself was always
+  // durable, so the same window was survivable.
+  const int dir_fd = ::open(target.parent_path().c_str(), O_RDONLY);
+  if (dir_fd >= 0) {
+    ::fsync(dir_fd);
+    ::close(dir_fd);
   }
 #endif
 }
@@ -407,7 +425,6 @@ jungle::storage::v1::InsertResult CanopyBackend::CollectionProxy::insert(
     append_record_locked(
         next_log_seq_++, CanopyOpCode::Insert,
         build_insert_payload(first_record_id, docs));
-    pending_ops_ += 1;
   } catch (const std::exception& ex) {
     reload_from_durable_state();
     return storage_error<jungle::storage::v1::InsertResult>("insert", ex);
@@ -440,7 +457,6 @@ jungle::storage::v1::UpdateBatchResult CanopyBackend::CollectionProxy::update(
     append_record_locked(
         next_log_seq_++, CanopyOpCode::Update,
         build_update_payload(filter_bytes, spec_bytes, multi, upsert));
-    pending_ops_ += 1;
   } catch (const std::exception& ex) {
     reload_from_durable_state();
     return storage_error<jungle::storage::v1::UpdateBatchResult>(
@@ -459,7 +475,6 @@ jungle::storage::v1::EraseResult CanopyBackend::CollectionProxy::erase(
     append_record_locked(
         next_log_seq_++, CanopyOpCode::Erase,
         build_erase_payload(filter_bytes, single));
-    pending_ops_ += 1;
   } catch (const std::exception& ex) {
     reload_from_durable_state();
     return storage_error<jungle::storage::v1::EraseResult>("erase", ex);
@@ -478,7 +493,6 @@ jungle::storage::v1::IndexMutationResult CanopyBackend::CollectionProxy::create_
     append_record_locked(
         next_log_seq_++, CanopyOpCode::CreateIndex,
         build_create_index_payload(name, field_paths, options.unique));
-    pending_ops_ += 1;
   } catch (const std::exception& ex) {
     reload_from_durable_state();
     return storage_error<jungle::storage::v1::IndexMutationResult>(
@@ -497,7 +511,6 @@ jungle::storage::v1::IndexMutationResult CanopyBackend::CollectionProxy::drop_in
     append_record_locked(
         next_log_seq_++, CanopyOpCode::DropIndex,
         build_drop_index_payload(name));
-    pending_ops_ += 1;
   } catch (const std::exception& ex) {
     reload_from_durable_state();
     return storage_error<jungle::storage::v1::IndexMutationResult>(
@@ -726,7 +739,6 @@ void CanopyBackend::CollectionProxy::checkpoint() {
 
   atomic_replace_file(tmp_path, state_path());
   last_checkpoint_seq_ = next_log_seq_ - 1;
-  pending_ops_ = 0;
   pending_bytes_ = 0;
   // The snapshot above is fsynced and already contains every operation the
   // log held, so the log's own durability is moot from here -- but the handle
@@ -742,7 +754,6 @@ void CanopyBackend::CollectionProxy::reload_from_durable_state() {
   loaded_ = false;
   last_checkpoint_seq_ = 0;
   next_log_seq_ = 1;
-  pending_ops_ = 0;
   pending_bytes_ = 0;
   load_from_log();
 }
