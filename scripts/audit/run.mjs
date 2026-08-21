@@ -112,7 +112,10 @@ function normalize(value) {
 
 const accuracyResults = [];
 
-const savannah = new SavannahDB(); // embedded, memory backend
+// Pinned to memory explicitly: persistence became the default in 0.2.0,
+// and an on-disk store here would silently turn every perf and accuracy
+// number into a different measurement than the one CI has been tracking.
+const savannah = new SavannahDB({ storage: { backend: 'memory' } });
 
 let caseIdx = 0;
 for (const tc of cases) {
@@ -202,7 +205,7 @@ async function bench(label, op, iterations) {
   process.stdout.write(`  ${label.padEnd(28)} ${iterations.toString().padStart(6)} ops in ${elapsed.toFixed(0).padStart(5)} ms  →  ${opsPerSec.padStart(7)} ops/s\n`);
 }
 
-const perfDb = new SavannahDB();
+const perfDb = new SavannahDB({ storage: { backend: 'memory' } });
 const perfColl = perfDb.collection('perf', 'docs');
 
 await bench('insertOne (cold)', async i => {
@@ -308,7 +311,7 @@ if (Database) {
 
   // -- Small-N point ops (per-call overhead) ---------------------------------
   {
-    const sav = new SavannahDB().collection('cmp', 'small');
+    const sav = new SavannahDB({ storage: { backend: 'memory' } }).collection('cmp', 'small');
     const sqlite = new Database(':memory:');
     sqlite.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, val INTEGER)');
     const insertStmt = sqlite.prepare('INSERT INTO t (id, name, val) VALUES (?, ?, ?)');
@@ -356,7 +359,7 @@ if (Database) {
 
     // (1) Bulk-insert with implicit _id index only (no secondary).
     //     Measures pure insert path + _id maintenance.
-    const savBulk = new SavannahDB().collection('cmp', 'bulk_idx_id_only');
+    const savBulk = new SavannahDB({ storage: { backend: 'memory' } }).collection('cmp', 'bulk_idx_id_only');
     const sqliteBulk = new Database(':memory:');
     sqliteBulk.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, val INTEGER)');
     const sqlInsertBulk = sqliteBulk.prepare('INSERT INTO t (id, name, val) VALUES (?, ?, ?)');
@@ -396,7 +399,7 @@ if (Database) {
     //      the AUDIT.md note about "_id index costs ~30%" is really asking:
     //      how much does maintaining a non-PK index on every write cost?
     //      The ratio against (1) is the index-write tax.
-    const savBulkIdx = new SavannahDB().collection('cmp', 'bulk_with_secondary');
+    const savBulkIdx = new SavannahDB({ storage: { backend: 'memory' } }).collection('cmp', 'bulk_with_secondary');
     await savBulkIdx.createIndex('val_idx', 'val');
     const sqliteBulkIdx = new Database(':memory:');
     sqliteBulkIdx.exec('CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, val INTEGER)');

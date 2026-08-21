@@ -14,6 +14,7 @@
     "compare:driver": "node scripts/compare-driver.mjs",
     "generate:mongodb-target": "node scripts/generate-mongodb-target.mjs",
     "smoke:canopy-restart": "node scripts/smoke-canopy-restart.mjs",
+    "smoke:default-persistence": "node scripts/smoke-default-persistence.mjs",
     "smoke:driver": "node scripts/smoke-driver.mjs",
     "smoke:engine": "node scripts/smoke-engine.mjs",
     "bench": "node scripts/audit/run.mjs --skip-mongo && node scripts/audit/render.mjs",

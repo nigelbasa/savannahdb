@@ -11,8 +11,9 @@ The Node.js SDK is importable from `@nigelbasa/savannahdb` and provides a unifie
 ### `new SavannahDB(options)`
 Instantiates the database connection.
 * `options.storage`: Configures direct **Embedded Mode** (in-process N-API).
-  * `storage.backend`: `'memory'` (in-memory) or `'canopy'` (persistent WAL/snapshot backend).
-  * `storage.root`: `string`. The file path on disk where Canopy database files will be persisted.
+  * `storage.backend`: `'canopy'` (persistent WAL/snapshot backend, **default**) or `'memory'` (ephemeral; data is discarded when the process exits).
+  * `storage.root`: `string`. The file path on disk where Canopy database files will be persisted. Defaults to `<cwd>/.savannahdb/canopy`.
+  * Omitting `options.storage` entirely persists to the default root. Before 0.2.0 it meant in-memory.
 * `options.url`: Configures **Client Mode** (HTTP REST client connecting to a standalone server, e.g., `'http://localhost:27018'`).
 
 ### `db.collection(dbName, collName)`

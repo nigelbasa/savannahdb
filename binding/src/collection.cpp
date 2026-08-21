@@ -544,6 +544,16 @@ Napi::Value Configure(const Napi::CallbackInfo& info) {
       return env.Null();
     }
     const std::string backend = info[0].As<Napi::String>().Utf8Value();
+    if (backend != "canopy" && backend != "memory") {
+      // Don't coerce an unknown string to memory: that would silently discard
+      // the caller's data on exit, which is the failure mode this whole
+      // configure() channel exists to prevent.
+      Napi::TypeError::New(
+          env, "configure(): backend must be 'canopy' or 'memory', got '" +
+                   backend + "'")
+          .ThrowAsJavaScriptException();
+      return env.Null();
+    }
     savannah::StorageOptions options;
     options.canopy = (backend == "canopy");
     if (info.Length() >= 2 && info[1].IsString()) {

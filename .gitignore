@@ -16,3 +16,7 @@ LOG.md
 server_run.*
 *.out
 *.err
+
+# Default Canopy storage root. Since 0.2.0 persistence is the default, so any
+# script or REPL run from the repo root materializes this directory.
+.savannahdb/

@@ -14,7 +14,9 @@ namespace savannah {
 // the only reliable channel on Windows where runtime process.env writes are
 // invisible to the C runtime's getenv/_dupenv_s.
 struct StorageOptions {
-  bool canopy = false;
+  // Persistent by default, matching Engine()'s env-driven default. Callers
+  // that want an ephemeral store must ask for it explicitly.
+  bool canopy = true;
   // Only meaningful when `canopy` is true. Empty means "use the default root"
   // (<cwd>/.savannahdb/canopy), matching the env-driven path.
   std::filesystem::path root;

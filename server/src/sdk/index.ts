@@ -2,7 +2,10 @@ import { BSON } from 'bson';
 import { getEngine, isEngineLoaded } from '../engine/bridge.js';
 
 export interface StorageConfig {
-  backend: 'memory' | 'canopy';
+  /** Defaults to 'canopy' (persistent). Pass 'memory' for an ephemeral store
+   *  whose contents are discarded when the process exits. */
+  backend?: 'memory' | 'canopy';
+  /** Canopy only. Defaults to `<cwd>/.savannahdb/canopy`. */
   root?: string;
 }
 
@@ -75,6 +78,19 @@ function isLoopbackHost(host: string): boolean {
   );
 }
 
+function envBackend(): 'memory' | 'canopy' | undefined {
+  const raw = process.env.SAVANNAH_STORAGE_BACKEND;
+  if (raw === undefined || raw === '') return undefined;
+  if (raw === 'memory' || raw === 'canopy') return raw;
+  // Don't quietly fall through to the default: a typo here would decide
+  // whether the caller's data survives the process, which is exactly the
+  // class of silent storage misconfiguration 0.1.1 was released to fix.
+  throw new Error(
+    `unrecognized SAVANNAH_STORAGE_BACKEND '${raw}' — expected 'canopy' ` +
+      "(default, persists to disk) or 'memory' (discarded on exit)",
+  );
+}
+
 export class SavannahDB {
   private mode: 'embedded' | 'client';
   private url?: string;
@@ -97,16 +113,26 @@ export class SavannahDB {
       }
     } else {
       this.mode = 'embedded';
-      if (config.storage) {
-        // Pass storage selection across the native boundary explicitly rather
-        // than via process.env. On Windows, Node's runtime process.env writes
-        // land in the Win32 environment block, which the C runtime's
-        // getenv/_dupenv_s (read by the engine at startup) never sees — so the
-        // canopy choice was silently dropped and nothing persisted to disk.
-        // configure() also lets the storage root actually take effect, and
-        // re-applying a different root rebuilds the engine against it.
-        getEngine().configure(config.storage.backend, config.storage.root);
-      }
+      // Persistence is the default as of 0.2.0, so configure() runs even when
+      // no storage block was passed.
+      //
+      // Pass storage selection across the native boundary explicitly rather
+      // than via process.env. On Windows, Node's runtime process.env writes
+      // land in the Win32 environment block, which the C runtime's
+      // getenv/_dupenv_s (read by the engine at startup) never sees — so the
+      // canopy choice was silently dropped and nothing persisted to disk.
+      // configure() also lets the storage root actually take effect, and
+      // re-applying a different root rebuilds the engine against it.
+      //
+      // Because configure() always runs now, the SAVANNAH_STORAGE_* variables
+      // have to be read here too: the engine's own env-driven default is only
+      // consulted when nothing ever calls configure(), so leaving them out
+      // would silently ignore a documented setting that worked in 0.1.x.
+      // Explicit config beats the environment.
+      getEngine().configure(
+        config.storage?.backend ?? envBackend() ?? 'canopy',
+        config.storage?.root ?? process.env.SAVANNAH_STORAGE_ROOT ?? undefined,
+      );
     }
   }
 

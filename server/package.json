@@ -1,6 +1,6 @@
 {
   "name": "@nigelbasa/savannahdb",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Independent custom document database with embedded (N-API) and REST APIs. MongoDB-compatible MQL surface, no MongoDB runtime needed.",
   "type": "module",
   "main": "dist/index.js",
