@@ -34,11 +34,13 @@ std::filesystem::path default_canopy_root() {
 }
 
 std::unique_ptr<storage::IStorageBackend> make_backend(
-    bool canopy, const std::filesystem::path& root) {
+    bool canopy, const std::filesystem::path& root, bool full_sync) {
   if (canopy) {
     const auto resolved = root.empty() ? default_canopy_root() : root;
+    const auto policy = full_sync ? storage::SyncPolicy::Full
+                                  : storage::SyncPolicy::Batched;
     try {
-      return std::make_unique<storage::CanopyBackend>(resolved);
+      return std::make_unique<storage::CanopyBackend>(resolved, policy);
     } catch (const std::filesystem::filesystem_error& e) {
       // Persistence is the default, so a process with an unwritable working
       // directory (read-only container rootfs, a serverless runtime outside
@@ -78,11 +80,12 @@ Engine::Engine() {
     }
   }
   backend_ = make_backend(
-      canopy, std::filesystem::path(env_or_empty("SAVANNAH_STORAGE_ROOT")));
+      canopy, std::filesystem::path(env_or_empty("SAVANNAH_STORAGE_ROOT")),
+      env_or_empty("SAVANNAH_STORAGE_SYNC") == "full");
 }
 
 Engine::Engine(const StorageOptions& options) {
-  backend_ = make_backend(options.canopy, options.root);
+  backend_ = make_backend(options.canopy, options.root, options.full_sync);
 }
 
 Engine::~Engine() = default;

@@ -36,6 +36,11 @@ Use SavannahDB directly in Node.js with zero server setup:
 > *Upgrading from 0.1.x?* The default there was in-memory, so code that passed no
 > `storage` block now writes to disk. Pass `storage: { backend: 'memory' }` to
 > keep the old behaviour.
+>
+> Durability is tunable with `storage.sync`. The default `'batched'` fsyncs at
+> checkpoint boundaries; committed writes still survive the process being
+> killed, because every record is handed to the OS immediately. Use `'full'` to
+> fsync per record and survive power loss too, at roughly 60x the write cost.
 
 ```javascript
 import { SavannahDB } from '@nigelbasa/savannahdb';

@@ -69,7 +69,11 @@ export interface EngineBindings {
   // getenv/_dupenv_s that the engine reads, so the canopy choice was silently
   // dropped and the engine fell back to in-memory. A changed root rebuilds the
   // engine, reloading durable state (and dropping any live cursors).
-  configure(backend: 'memory' | 'canopy', root?: string): ConfigureResult;
+  configure(
+    backend: 'memory' | 'canopy',
+    root?: string,
+    sync?: 'batched' | 'full',
+  ): ConfigureResult;
   insert(db: string, coll: string, docs: Uint8Array[]): InsertResult;
   createIndex(
     db: string,

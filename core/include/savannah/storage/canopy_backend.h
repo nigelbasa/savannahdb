@@ -4,6 +4,7 @@
 #include "savannah/storage/canopy.h"
 #include "savannah/storage/memory.h"
 
+#include <cstdio>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -12,6 +13,23 @@
 #include <unordered_map>
 
 namespace savannah::storage {
+
+// How hard Canopy works to get each write onto the physical medium.
+//
+// Full reopened-and-fsynced the log per record, which cost ~16 ms per
+// operation (63 single-doc inserts/sec). Batched keeps the log handle open and
+// pushes each record to the OS with fflush, fsyncing at checkpoint boundaries
+// and on close.
+//
+// The difference is only visible on power loss or an OS crash: a Batched write
+// that has reached the OS page cache still survives the *process* dying
+// (uncaught exception, process.exit, SIGKILL), because the kernel owns the
+// bytes by then. This mirrors SQLite's PRAGMA synchronous=NORMAL and
+// Postgres's synchronous_commit=off.
+enum class SyncPolicy : std::uint8_t {
+  Batched = 0,
+  Full = 1,
+};
 
 enum class CanopyOpCode : std::uint8_t {
   Insert = 1,
@@ -23,7 +41,8 @@ enum class CanopyOpCode : std::uint8_t {
 
 class CanopyBackend final : public IStorageBackend {
  public:
-  explicit CanopyBackend(std::filesystem::path root_dir);
+  explicit CanopyBackend(std::filesystem::path root_dir,
+                         SyncPolicy sync = SyncPolicy::Batched);
 
   jungle::storage::v1::Collection& collection(
       std::string_view db, std::string_view coll) override;
@@ -32,7 +51,9 @@ class CanopyBackend final : public IStorageBackend {
   class CollectionProxy final : public jungle::storage::v1::Collection {
    public:
     CollectionProxy(canopy::Layout layout, std::string db_name,
-                    std::string coll_name, MemoryCollection& inner);
+                    std::string coll_name, MemoryCollection& inner,
+                    SyncPolicy sync);
+    ~CollectionProxy();
 
     jungle::storage::v1::InsertResult insert(
         std::span<const bson::BsonView> docs) override;
@@ -69,6 +90,15 @@ class CanopyBackend final : public IStorageBackend {
 
    private:
     std::filesystem::path log_path() const;
+    // Appends through a handle held open across records. Callers must already
+    // hold write_mutex_.
+    void append_record_locked(std::uint64_t seq, CanopyOpCode op,
+                              std::span<const std::uint8_t> payload);
+    void open_log_locked();
+    // Closes the handle so the log file can be atomically replaced --
+    // MoveFileEx cannot replace a target that is still open on Windows.
+    void close_log_locked() noexcept;
+    void sync_log_locked();
     std::filesystem::path state_path() const;
     void load_from_state();
     void apply_insert_payload(std::span<const std::uint8_t> payload);
@@ -82,6 +112,10 @@ class CanopyBackend final : public IStorageBackend {
     void reload_from_durable_state();
 
     canopy::Layout layout_;
+    SyncPolicy sync_;
+    // Held open across appends. Reopening per record cost two syscalls on
+    // every write for no benefit; nullptr simply means "not opened yet".
+    std::FILE* log_file_{nullptr};
     std::string db_name_;
     std::string coll_name_;
     MemoryCollection& inner_;
@@ -94,11 +128,18 @@ class CanopyBackend final : public IStorageBackend {
     std::uint64_t last_checkpoint_seq_{0};
     std::uint64_t next_log_seq_{1};
     std::size_t pending_ops_{0};
+    // Bytes appended since the last checkpoint. Checkpointing rewrites a
+    // snapshot of the whole collection, so triggering it on an operation
+    // count made write cost grow with collection size: every N writes paid an
+    // O(collection) snapshot. Sizing the trigger in log bytes instead keeps
+    // that cost amortized and bounds replay work on open.
+    std::uint64_t pending_bytes_{0};
   };
 
   void ensure_root_layout() const;
 
   canopy::Layout layout_;
+  SyncPolicy sync_;
   MemoryBackend memory_;
   std::unordered_map<std::string, std::unique_ptr<CollectionProxy>> collections_;
 };

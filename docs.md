@@ -14,6 +14,7 @@ Instantiates the database connection.
   * `storage.backend`: `'canopy'` (persistent WAL/snapshot backend, **default**) or `'memory'` (ephemeral; data is discarded when the process exits).
   * `storage.root`: `string`. The file path on disk where Canopy database files will be persisted. Defaults to `<cwd>/.savannahdb/canopy`.
   * Omitting `options.storage` entirely persists to the default root. Before 0.2.0 it meant in-memory.
+  * `storage.sync`: `'batched'` (**default**) or `'full'`. Canopy only. Every write reaches the OS immediately under both, so committed data survives the process being killed. `'batched'` fsyncs at checkpoint boundaries; `'full'` fsyncs per record, which additionally survives power loss but costs roughly 60x on single-document writes (~500/s vs ~29,000/s).
 * `options.url`: Configures **Client Mode** (HTTP REST client connecting to a standalone server, e.g., `'http://localhost:27018'`).
 
 ### `db.collection(dbName, collName)`

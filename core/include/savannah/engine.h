@@ -20,6 +20,10 @@ struct StorageOptions {
   // Only meaningful when `canopy` is true. Empty means "use the default root"
   // (<cwd>/.savannahdb/canopy), matching the env-driven path.
   std::filesystem::path root;
+  // fsync every record rather than at checkpoint boundaries. Costs roughly
+  // three orders of magnitude on single-document writes; buys durability
+  // across power loss rather than merely across process death.
+  bool full_sync = false;
 };
 
 class Engine {
