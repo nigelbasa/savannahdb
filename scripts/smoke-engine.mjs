@@ -6,6 +6,13 @@ import assert from 'node:assert/strict';
 const require = createRequire(import.meta.url);
 const engine = require('../build/Release/savannah_engine.node');
 
+// Pin the backend instead of inheriting the default, which is now canopy.
+// This suite reinserts the same _id values on every run, so an on-disk store
+// would fail the second run on the implicit _id_ unique index -- and would
+// scatter a .savannahdb/ directory through the repo. Tests should never
+// depend on whatever the default happens to be.
+engine.configure('memory');
+
 assert.equal(typeof engine.insert, 'function', 'engine.insert missing');
 assert.equal(typeof engine.createIndex, 'function', 'engine.createIndex missing');
 assert.equal(typeof engine.dropIndex, 'function', 'engine.dropIndex missing');
