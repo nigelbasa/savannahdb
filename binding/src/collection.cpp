@@ -389,14 +389,21 @@ Napi::Value GetMore(const Napi::CallbackInfo& info) {
 
     std::vector<bson::BsonView> batch;
     const bool more = drain_batch(*iter, batch_size, batch);
+
+    // Copy the batch into JS *before* releasing the cursor. These BsonViews
+    // can point into storage owned by the iterator itself -- ProjectingIterator
+    // holds projected documents in its own deque, and OwnedBytesIterator (the
+    // aggregation path) owns its buffers -- so erase() frees the bytes that
+    // views_to_array is about to read. Plain find cursors are unaffected;
+    // their views point at arena-owned slot bytes that outlive the iterator.
+    Napi::Object out = Napi::Object::New(env);
+    out.Set("batch", views_to_array(env, batch));
+
     std::int64_t next_id = cursor_id;
     if (!more) {
       engine.cursors().erase(cursor_id);
       next_id = 0;
     }
-
-    Napi::Object out = Napi::Object::New(env);
-    out.Set("batch", views_to_array(env, batch));
     out.Set("cursorId", Napi::BigInt::New(env, next_id));
     return out;
   });
