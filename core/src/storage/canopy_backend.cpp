@@ -24,7 +24,12 @@ constexpr char kManifestBody[] = "{\"engine\":\"canopy\",\"format\":3}\n";
 // future options like partial/sparse).
 constexpr std::uint8_t kLogHeader[] = {'C', 'N', 'P', 'Y', 'L', 'O', 'G', '4'};
 constexpr std::uint8_t kStateHeader[] = {'C', 'N', 'P', 'Y', 'S', 'T', '1', '2'};
-constexpr std::size_t kCheckpointIntervalOps = 4;
+// Checkpoint after this many bytes of log, not after a fixed number of
+// operations. At the previous setting (every 4 ops) a 2,000-document insert
+// loop rewrote the entire collection 500 times, which cost more than the
+// fsync it was paired with. 8 MiB bounds both the amortized write cost and
+// the amount of log replayed on open.
+constexpr std::uint64_t kCheckpointBytes = 8ull * 1024 * 1024;
 constexpr std::uint8_t kIndexFlagUnique = 1 << 0;
 
 struct IndexDef {
@@ -168,29 +173,24 @@ void reset_log(std::filesystem::path path) {
   atomic_replace_file(tmp, path);
 }
 
-void append_record(std::filesystem::path path, std::uint64_t seq, CanopyOpCode op,
-                   std::span<const std::uint8_t> payload) {
-  ensure_log_header(path);
-
-  FILE* file = cross_fopen(path.string().c_str(), "ab");
-  if (!file) {
-    throw std::runtime_error("Canopy failed to open log for append");
-  }
-
+// Serializes one frame into a single buffer so the record reaches the OS as
+// one fwrite. Four separate fwrites could be split across page-cache
+// boundaries by an ill-timed crash, leaving a half-written header that replay
+// would have to reason about; one buffer keeps the torn-write window to the
+// tail of a single record.
+std::vector<std::uint8_t> build_frame(std::uint64_t seq, CanopyOpCode op,
+                                      std::span<const std::uint8_t> payload) {
   const std::uint32_t frame_size = static_cast<std::uint32_t>(
       sizeof(std::uint64_t) + sizeof(std::uint8_t) + payload.size());
-  const std::uint8_t opcode = static_cast<std::uint8_t>(op);
-  const bool ok =
-      std::fwrite(&frame_size, sizeof(frame_size), 1, file) == 1 &&
-      std::fwrite(&seq, sizeof(seq), 1, file) == 1 &&
-      std::fwrite(&opcode, sizeof(opcode), 1, file) == 1 &&
-      (payload.empty() ||
-       std::fwrite(payload.data(), 1, payload.size(), file) == payload.size()) &&
-      cross_fsync(file);
-  std::fclose(file);
-  if (!ok) {
-    throw std::runtime_error("Canopy failed to durably append log record");
-  }
+  std::vector<std::uint8_t> frame;
+  frame.reserve(sizeof(frame_size) + frame_size);
+  const auto* size_bytes = reinterpret_cast<const std::uint8_t*>(&frame_size);
+  frame.insert(frame.end(), size_bytes, size_bytes + sizeof(frame_size));
+  const auto* seq_bytes = reinterpret_cast<const std::uint8_t*>(&seq);
+  frame.insert(frame.end(), seq_bytes, seq_bytes + sizeof(seq));
+  frame.push_back(static_cast<std::uint8_t>(op));
+  frame.insert(frame.end(), payload.begin(), payload.end());
+  return frame;
 }
 
 std::vector<std::uint8_t> build_insert_payload(
@@ -336,11 +336,67 @@ LoadedState parse_state_blob(const std::vector<std::uint8_t>& bytes) {
 
 CanopyBackend::CollectionProxy::CollectionProxy(
     canopy::Layout layout, std::string db_name, std::string coll_name,
-    MemoryCollection& inner)
+    MemoryCollection& inner, SyncPolicy sync)
     : layout_(std::move(layout)),
+      sync_(sync),
       db_name_(std::move(db_name)),
       coll_name_(std::move(coll_name)),
       inner_(inner) {}
+
+CanopyBackend::CollectionProxy::~CollectionProxy() {
+  std::lock_guard<std::mutex> lock(write_mutex_);
+  // Last durability point under SyncPolicy::Batched. Best-effort by
+  // necessity -- throwing from a destructor would terminate the process, and
+  // an unwritable disk at teardown is not something the caller can act on.
+  try {
+    sync_log_locked();
+  } catch (...) {
+  }
+  close_log_locked();
+}
+
+void CanopyBackend::CollectionProxy::open_log_locked() {
+  if (log_file_) return;
+  ensure_log_header(log_path());
+  log_file_ = cross_fopen(log_path().string().c_str(), "ab");
+  if (!log_file_) {
+    throw std::runtime_error("Canopy failed to open log for append");
+  }
+}
+
+void CanopyBackend::CollectionProxy::close_log_locked() noexcept {
+  if (!log_file_) return;
+  std::fclose(log_file_);
+  log_file_ = nullptr;
+}
+
+void CanopyBackend::CollectionProxy::sync_log_locked() {
+  if (!log_file_) return;
+  if (!cross_fsync(log_file_)) {
+    throw std::runtime_error("Canopy failed to fsync log");
+  }
+}
+
+void CanopyBackend::CollectionProxy::append_record_locked(
+    std::uint64_t seq, CanopyOpCode op,
+    std::span<const std::uint8_t> payload) {
+  open_log_locked();
+  const auto frame = build_frame(seq, op, payload);
+  if (std::fwrite(frame.data(), 1, frame.size(), log_file_) != frame.size()) {
+    throw std::runtime_error("Canopy failed to append log record");
+  }
+  // fflush hands the bytes to the kernel on every record regardless of
+  // policy, so a crashing *process* never loses a committed write. Only the
+  // fsync -- the part that waits on the physical device -- is what Batched
+  // defers to checkpoint boundaries.
+  if (std::fflush(log_file_) != 0) {
+    throw std::runtime_error("Canopy failed to flush log record");
+  }
+  if (sync_ == SyncPolicy::Full) {
+    sync_log_locked();
+  }
+  pending_bytes_ += frame.size();
+}
 
 jungle::storage::v1::InsertResult CanopyBackend::CollectionProxy::insert(
     std::span<const bson::BsonView> docs) {
@@ -348,8 +404,8 @@ jungle::storage::v1::InsertResult CanopyBackend::CollectionProxy::insert(
   const storage::RecordId first_record_id = inner_.next_record_id();
   auto result = inner_.insert(docs);
   try {
-    append_record(
-        log_path(), next_log_seq_++, CanopyOpCode::Insert,
+    append_record_locked(
+        next_log_seq_++, CanopyOpCode::Insert,
         build_insert_payload(first_record_id, docs));
     pending_ops_ += 1;
   } catch (const std::exception& ex) {
@@ -381,8 +437,8 @@ jungle::storage::v1::UpdateBatchResult CanopyBackend::CollectionProxy::update(
   auto result = inner_.update(filter_bytes, spec_bytes, multi, upsert);
   if (result.err_code != 0) return result;
   try {
-    append_record(
-        log_path(), next_log_seq_++, CanopyOpCode::Update,
+    append_record_locked(
+        next_log_seq_++, CanopyOpCode::Update,
         build_update_payload(filter_bytes, spec_bytes, multi, upsert));
     pending_ops_ += 1;
   } catch (const std::exception& ex) {
@@ -400,8 +456,8 @@ jungle::storage::v1::EraseResult CanopyBackend::CollectionProxy::erase(
   auto result = inner_.erase(filter_bytes, single);
   if (result.deleted == 0) return result;
   try {
-    append_record(
-        log_path(), next_log_seq_++, CanopyOpCode::Erase,
+    append_record_locked(
+        next_log_seq_++, CanopyOpCode::Erase,
         build_erase_payload(filter_bytes, single));
     pending_ops_ += 1;
   } catch (const std::exception& ex) {
@@ -419,8 +475,8 @@ jungle::storage::v1::IndexMutationResult CanopyBackend::CollectionProxy::create_
   auto result = inner_.create_index(name, field_paths, options);
   if (result.err_code != 0 || !result.changed) return result;
   try {
-    append_record(
-        log_path(), next_log_seq_++, CanopyOpCode::CreateIndex,
+    append_record_locked(
+        next_log_seq_++, CanopyOpCode::CreateIndex,
         build_create_index_payload(name, field_paths, options.unique));
     pending_ops_ += 1;
   } catch (const std::exception& ex) {
@@ -438,8 +494,8 @@ jungle::storage::v1::IndexMutationResult CanopyBackend::CollectionProxy::drop_in
   auto result = inner_.drop_index(name);
   if (result.err_code != 0 || !result.changed) return result;
   try {
-    append_record(
-        log_path(), next_log_seq_++, CanopyOpCode::DropIndex,
+    append_record_locked(
+        next_log_seq_++, CanopyOpCode::DropIndex,
         build_drop_index_payload(name));
     pending_ops_ += 1;
   } catch (const std::exception& ex) {
@@ -469,10 +525,39 @@ void CanopyBackend::CollectionProxy::load_from_log() {
 
   std::size_t offset = sizeof(kLogHeader);
   while (offset < bytes.size()) {
+    // Where this frame begins, so an incomplete tail can be cut back to the
+    // last whole record. Under SyncPolicy::Batched the final records may be
+    // sitting in the OS page cache when power is lost, so a torn tail is an
+    // expected recovery case -- not corruption. Throwing here would turn
+    // "lost the last write" into "the database will not open".
+    const std::size_t frame_start = offset;
+    const auto truncate_tail = [&]() {
+      std::error_code ec;
+      std::filesystem::resize_file(log_path(), frame_start, ec);
+      // If the truncate fails the partial frame stays on disk and the next
+      // append would write behind it; surfacing that is better than silently
+      // building on a log we know is malformed.
+      if (ec) {
+        throw std::runtime_error(
+            "Canopy found a torn log tail and could not truncate it: " +
+            ec.message());
+      }
+    };
+
+    if (bytes.size() - offset < sizeof(std::uint32_t)) {
+      truncate_tail();
+      break;
+    }
     const std::uint32_t frame_size = read_u32(bytes.data(), bytes.size(), &offset);
-    if (frame_size < sizeof(std::uint64_t) + sizeof(std::uint8_t) ||
-        offset + frame_size > bytes.size()) {
-      throw std::runtime_error("Canopy log frame truncated");
+    if (frame_size < sizeof(std::uint64_t) + sizeof(std::uint8_t)) {
+      // A length shorter than a header cannot come from a partial write of a
+      // well-formed record, so this is real corruption rather than a torn
+      // tail. Refuse it instead of silently discarding everything after it.
+      throw std::runtime_error("Canopy log frame malformed");
+    }
+    if (offset + frame_size > bytes.size()) {
+      truncate_tail();
+      break;
     }
     const std::uint64_t seq = read_u64(bytes.data(), bytes.size(), &offset);
     const auto op = static_cast<CanopyOpCode>(bytes[offset++]);
@@ -605,7 +690,7 @@ void CanopyBackend::CollectionProxy::apply_drop_index_payload(
 }
 
 void CanopyBackend::CollectionProxy::maybe_checkpoint() {
-  if (pending_ops_ < kCheckpointIntervalOps) return;
+  if (pending_bytes_ < kCheckpointBytes) return;
   checkpoint();
 }
 
@@ -642,20 +727,28 @@ void CanopyBackend::CollectionProxy::checkpoint() {
   atomic_replace_file(tmp_path, state_path());
   last_checkpoint_seq_ = next_log_seq_ - 1;
   pending_ops_ = 0;
+  pending_bytes_ = 0;
+  // The snapshot above is fsynced and already contains every operation the
+  // log held, so the log's own durability is moot from here -- but the handle
+  // must be closed before reset_log(), because Windows cannot atomically
+  // replace a file that is still open.
+  close_log_locked();
   reset_log(log_path());
 }
 
 void CanopyBackend::CollectionProxy::reload_from_durable_state() {
+  close_log_locked();
   inner_.clear_for_reload();
   loaded_ = false;
   last_checkpoint_seq_ = 0;
   next_log_seq_ = 1;
   pending_ops_ = 0;
+  pending_bytes_ = 0;
   load_from_log();
 }
 
-CanopyBackend::CanopyBackend(std::filesystem::path root_dir)
-    : layout_(std::move(root_dir)) {
+CanopyBackend::CanopyBackend(std::filesystem::path root_dir, SyncPolicy sync)
+    : layout_(std::move(root_dir)), sync_(sync) {
   ensure_root_layout();
 }
 
@@ -666,7 +759,7 @@ jungle::storage::v1::Collection& CanopyBackend::collection(
   if (it == collections_.end()) {
     auto& inner = dynamic_cast<MemoryCollection&>(memory_.collection(db, coll));
     auto proxy = std::make_unique<CollectionProxy>(
-        layout_, std::string(db), std::string(coll), inner);
+        layout_, std::string(db), std::string(coll), inner, sync_);
     proxy->load_from_log();
     it = collections_.emplace(ns, std::move(proxy)).first;
   }

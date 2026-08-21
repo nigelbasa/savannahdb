@@ -7,6 +7,11 @@ export interface StorageConfig {
   backend?: 'memory' | 'canopy';
   /** Canopy only. Defaults to `<cwd>/.savannahdb/canopy`. */
   root?: string;
+  /** Canopy only. 'batched' (default) fsyncs at checkpoint boundaries; every
+   *  write still reaches the OS immediately, so committed data survives the
+   *  process dying. 'full' fsyncs per record, which also survives power loss
+   *  but costs roughly three orders of magnitude on single-document writes. */
+  sync?: 'batched' | 'full';
 }
 
 export interface SavannahDBConfig {
@@ -132,6 +137,8 @@ export class SavannahDB {
       getEngine().configure(
         config.storage?.backend ?? envBackend() ?? 'canopy',
         config.storage?.root ?? process.env.SAVANNAH_STORAGE_ROOT ?? undefined,
+        config.storage?.sync ??
+          (process.env.SAVANNAH_STORAGE_SYNC === 'full' ? 'full' : undefined),
       );
     }
   }

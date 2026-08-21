@@ -16,6 +16,7 @@ std::unique_ptr<savannah::Engine> g_engine;
 bool g_configured = false;
 bool g_canopy = false;
 std::filesystem::path g_root;
+bool g_full_sync = false;
 
 }  // namespace
 
@@ -32,13 +33,14 @@ savannah::Engine& global_engine() {
 bool configure_engine(const savannah::StorageOptions& options) {
   std::lock_guard<std::mutex> lock(g_engine_mutex);
   if (g_engine && g_configured && g_canopy == options.canopy &&
-      g_root == options.root) {
+      g_root == options.root && g_full_sync == options.full_sync) {
     return false;
   }
   g_engine = std::make_unique<savannah::Engine>(options);
   g_configured = true;
   g_canopy = options.canopy;
   g_root = options.root;
+  g_full_sync = options.full_sync;
   return true;
 }
 

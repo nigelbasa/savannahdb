@@ -79,11 +79,39 @@ runInline(`
     'ops.bin',
   );
   fs.chmodSync(logPath, 0o444);
+`);
+
+// Canopy holds the log handle open across appends (reopening per record cost
+// ~16 ms a write). A chmod therefore no longer affects a session that is
+// already writing -- it takes effect the next time the log is opened. So the
+// "append failure surfaces structurally" check has to run in a fresh process,
+// where the read-only bit is hit by the open itself.
+runInline(`
+  const assert = require('node:assert/strict');
+  const { BSON } = require('bson');
+  const engine = require('./build/Release/savannah_engine.node');
+  const ser = (value) => BSON.serialize(value);
+  const de = (bytes) => BSON.deserialize(Buffer.from(bytes));
+  const empty = Buffer.from([5, 0, 0, 0, 0]);
+
   const failed = engine.insert('zoo', 'animals', [ser({ _id: 99, species: 'fail' })]);
   assert.ok(failed.err, 'storage append failure should surface structurally');
   const afterFailure = engine.find('zoo', 'animals', ser({ _id: 99 }), 10, empty, 0, 0, empty);
-  assert.deepEqual(afterFailure.batch.map(de), []);
+  assert.deepEqual(afterFailure.batch.map(de), [], 'failed append must not leave the doc visible');
 `);
+
+// Restore write access so the reopen below exercises recovery, not the
+// permission bit.
+{
+  const logPath = path.join(
+    storageRoot,
+    'collections',
+    'n-7a6f6f',
+    'n-616e696d616c73',
+    'ops.bin',
+  );
+  fs.chmodSync(logPath, 0o644);
+}
 
 runInline(`
   const assert = require('node:assert/strict');

@@ -530,7 +530,7 @@ Napi::Value KillCursors(const Napi::CallbackInfo& info) {
   });
 }
 
-// configure(backend: string, root?: string)
+// configure(backend: string, root?: string, sync?: string)
 //   -> { backend: 'canopy' | 'memory', changed: boolean }
 // Selects the storage backend explicitly across the native boundary. This is
 // the reliable channel the SDK uses instead of process.env, which on Windows
@@ -559,6 +559,17 @@ Napi::Value Configure(const Napi::CallbackInfo& info) {
     if (info.Length() >= 2 && info[1].IsString()) {
       options.root =
           std::filesystem::path(info[1].As<Napi::String>().Utf8Value());
+    }
+    if (info.Length() >= 3 && info[2].IsString()) {
+      const std::string sync = info[2].As<Napi::String>().Utf8Value();
+      if (sync != "full" && sync != "batched") {
+        Napi::TypeError::New(
+            env, "configure(): sync must be 'batched' or 'full', got '" +
+                     sync + "'")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+      }
+      options.full_sync = (sync == "full");
     }
 
     const bool changed = configure_engine(options);
