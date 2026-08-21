@@ -52,6 +52,15 @@ jobs:
       - name: Build TS
         run: npm run build --workspace @nigelbasa/savannahdb
 
+      # Storage/cursor smoke tests. bench.yml did not run these, which is why a
+      # use-after-free on the getMore path reached two releases: it returned
+      # intact data on Windows and corrupted BSON on Linux, and no CI job ever
+      # executed it on Linux.
+      - name: Storage + cursor smoke tests
+        run: |
+          npm run smoke:engine
+          npm run smoke:canopy-restart
+
       # The audit's accuracy section needs MongoDB; we don't run one in this job
       # (would add 30+ s startup and isn't the point of bench). --skip-mongo
       # tells the runner to mark accuracy verdicts as "skipped" but still run
